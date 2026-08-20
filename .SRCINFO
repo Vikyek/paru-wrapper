@@ -1,0 +1,15 @@
+pkgbase = paru-wrapper
+	pkgdesc = A wrapper around paru that implements dependency-aware orphan cleaning and automatic local repository DB updates
+	pkgver = 1.0.0
+	pkgrel = 1
+	url = https://github.com/Vikyek/paru-wrapper
+	install = paru-wrapper.install
+	arch = any
+	license = GPL
+	depends = paru
+	depends = bash
+	depends = sudo
+	source = paru-wrapper
+	sha256sums = 9913dc039d9ac253627c7a17e24fa1cca88ba55ec3c3b94327947b4b7e24fca2
+
+pkgname = paru-wrapper

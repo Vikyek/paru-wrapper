@@ -1,0 +1,4 @@
+pkg/
+src/
+paru-wrapper-*.pkg.tar.zst
+paru-wrapper-*.log

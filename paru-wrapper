@@ -1,0 +1,89 @@
+#!/bin/bash
+
+# Only run orphan cleaning if we are doing a system upgrade or installing/upgrading packages.
+# Paru arguments that start an install or upgrade transaction:
+# -S, -Syu, -Syyu, -Sy, -U, or no arguments (which defaults to interactive system upgrade).
+# Arguments to ignore (which don't write/install): -Q, -G, -F, -c, -h, --help, -V, --version, etc.
+is_transaction=true
+for arg in "$@"; do
+    case "$arg" in
+        -Q*|-G*|-F*|-c*|-h|--help|-V|--version)
+            is_transaction=false
+            break
+            ;;
+    esac
+done
+
+if [ "$is_transaction" = true ]; then
+    # 1. Get the list of packages to be upgraded
+    # We run paru -Quq to get the list of pending updates (including AUR)
+    upgrades=$(/usr/bin/paru -Quq 2>/dev/null)
+
+    # 2. Get the list of all current orphans
+    orphans=$(pacman -Qtdq)
+
+    if [[ -n "$orphans" ]]; then
+        # 3. Find dependencies of the new versions of the upgraded packages
+        new_deps=""
+        if [[ -n "$upgrades" ]]; then
+            # Query pacman sync database for repository packages dependencies
+            repo_deps=$(pacman -Si $upgrades 2>/dev/null | grep -E '^Depends On' | cut -d: -f2- | tr -d '>=<0-9.' | tr ' ' '\n' | sort -u)
+            
+            # Query AUR RPC (or paru info) for AUR package dependencies
+            aur_deps=""
+            aur_upgrades=$(echo "$upgrades" | grep -vFf <(pacman -Slq 2>/dev/null) || true)
+            if [[ -n "$aur_upgrades" ]]; then
+                aur_deps=$(/usr/bin/paru -Si $aur_upgrades 2>/dev/null | grep -E '^Depends On' | cut -d: -f2- | tr -d '>=<0-9.' | tr ' ' '\n' | sort -u)
+            fi
+            
+            new_deps=$(echo -e "${repo_deps}\n${aur_deps}" | sort -u)
+        fi
+        
+        # 4. Filter out any orphans that are in new_deps
+        orphans_to_remove=""
+        for orphan in $orphans; do
+            if echo "$new_deps" | grep -Fqx "$orphan"; then
+                echo "[paru-wrapper] Preserving orphan package '$orphan' (will be needed by incoming updates)." >&2
+            else
+                orphans_to_remove="$orphans_to_remove $orphan"
+            fi
+        done
+        
+        # 5. Clean the remaining orphans
+        if [[ -n "$orphans_to_remove" ]]; then
+            echo "[paru-wrapper] Cleaning orphaned packages: $orphans_to_remove" >&2
+            sudo pacman -Rns --noconfirm $orphans_to_remove
+        fi
+    fi
+fi
+
+# 6. Execute the real paru command
+start_marker="/tmp/paru_start_time.$$"
+touch "$start_marker"
+
+/usr/bin/paru "$@"
+exit_code=$?
+
+if [ $exit_code -eq 0 ] && [ "$is_transaction" = true ]; then
+    # Find all packages built during this paru run.
+    # Since PKGDEST is configured to /mnt/v/Data/makepkg/packages,
+    # any package built by makepkg under paru will be saved there.
+    mapfile -t new_pkgs < <(find /mnt/v/Data/makepkg/packages -name "*.pkg.tar.zst" -newer "$start_marker" 2>/dev/null)
+    
+    if [ ${#new_pkgs[@]} -gt 0 ]; then
+        echo -e "\n[paru-wrapper] Detected ${#new_pkgs[@]} newly built package(s):" >&2
+        for pkg in "${new_pkgs[@]}"; do
+            echo "  -> $(basename "$pkg")" >&2
+        done
+        
+        echo "[paru-wrapper] Automatically updating MKVPKG repository database..." >&2
+        # repo-add options:
+        # -R: removes old package files from disk after updating database
+        # -w: wait for lock file
+        repo-add -R -w /mnt/v/Data/makepkg/packages/MKVPKG.db.tar.gz "${new_pkgs[@]}"
+        echo "[paru-wrapper] MKVPKG repository database updated successfully." >&2
+    fi
+fi
+
+rm -f "$start_marker"
+exit $exit_code
