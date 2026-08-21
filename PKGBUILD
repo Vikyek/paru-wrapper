@@ -1,6 +1,6 @@
 pkgname=paru-wrapper
 pkgver=1.0.0
-pkgrel=1
+pkgrel=2
 pkgdesc="A wrapper around paru that implements dependency-aware orphan cleaning and automatic local repository DB updates"
 arch=('any')
 url="https://github.com/Vikyek/paru-wrapper"
@@ -10,7 +10,7 @@ install=paru-wrapper.install
 source=(
     "paru-wrapper"
 )
-sha256sums=('9913dc039d9ac253627c7a17e24fa1cca88ba55ec3c3b94327947b4b7e24fca2')
+sha256sums=('07527d9231622cd0d7686beeebd89a61ae95da3e18b49ff292851c946e5f38bc')
 
 package() {
     # Install paru wrapper
