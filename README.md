@@ -15,3 +15,12 @@ Install using standard Arch packaging:
 ```bash
 makepkg -si
 ```
+
+## Manual Installation
+
+You can also run the automated installation script:
+
+```bash
+./install.sh
+```
+
