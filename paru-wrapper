@@ -1,14 +1,49 @@
 #!/bin/bash
 
-# Only run orphan cleaning if we are doing a system upgrade or installing/upgrading packages.
-# Paru arguments that start an install or upgrade transaction:
-# -S, -Syu, -Syyu, -Sy, -U, or no arguments (which defaults to interactive system upgrade).
+# paru-wrapper - wrapper around paru to handle dependency-aware orphan cleaning
+# and automatic local repository DB updates.
+#
+# Configuration via environment variables:
+#  PARU_WRAPPER_REPO           default: /mnt/v/Data/makepkg/packages
+#  PARU_WRAPPER_REPO_DB        default: $PARU_WRAPPER_REPO/MKVPKG.db.tar.gz
+#  PARU_WRAPPER_PROJECTS_DIR   default: $HOME/Projects
+#  PARU_WRAPPER_DRY_RUN        default: false (set to "true" or use --dry-run flag)
+#
+# Usage:
+#  /usr/bin/paru-wrapper [--dry-run] <paru args...>
+
+set -euo pipefail
+
+# Configurable paths and defaults
+PARU_WRAPPER_REPO="${PARU_WRAPPER_REPO:-/mnt/v/Data/makepkg/packages}"
+PARU_WRAPPER_REPO_DB="${PARU_WRAPPER_REPO_DB:-${PARU_WRAPPER_REPO}/MKVPKG.db.tar.gz}"
+PARU_WRAPPER_PROJECTS_DIR="${PARU_WRAPPER_PROJECTS_DIR:-${HOME:-/root}/Projects}"
+PARU_WRAPPER_DRY_RUN="${PARU_WRAPPER_DRY_RUN:-false}"
+
+# Parse a --dry-run flag (remove it from args passed to paru)
+DRY_RUN=false
+CLEAN_ARGS=()
+POSITIONAL_ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run|-n)
+            DRY_RUN=true
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$arg")
+            ;;
+    esac
+done
+set -- "${POSITIONAL_ARGS[@]}"
+
+# Only run orphan cleaning if doing an install/upgrade transaction:
 is_transaction=false
 if [ $# -eq 0 ]; then
     is_transaction=true
 else
     for arg in "$@"; do
         if [[ "$arg" =~ ^-S[a-zA-Z]*$ ]]; then
+            # If -S with only flags that are not search/list options
             if [[ ! "$arg" =~ [silgpq] ]]; then
                 is_transaction=true
                 break
@@ -32,7 +67,7 @@ if [ "$is_transaction" = true ]; then
         fi
     done
 
-    # Helper function to check if package is in official repos
+    # Helper to check if package is in official repos
     is_official_pkg() {
         local pkg="$1"
         local repo
@@ -49,15 +84,18 @@ if [ "$is_transaction" = true ]; then
         if is_official_pkg "$pkg"; then
             filtered_targets+=("$pkg")
         else
-            # Check if in AUR using RPC
             in_aur=$(curl -s "https://aur.archlinux.org/rpc/?v=5&type=info&arg[]=$pkg" | grep -oP '"resultcount":\s*\K\d+' || echo "0")
             if [ "$in_aur" -eq 0 ]; then
-                # Local package not in AUR
-                if [ -d "/home/v/Projects/$pkg" ] && [ -f "/home/v/Projects/$pkg/PKGBUILD" ]; then
-                    echo "[paru-wrapper] Rebuilding local package '$pkg' from source..." >&2
-                    (cd "/home/v/Projects/$pkg" && makepkg -sfi --noconfirm)
+                # Local package not in AUR: rebuild from PROJECTS_DIR if available
+                if [ -d "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}" ] && [ -f "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}/PKGBUILD" ]; then
+                    echo "[paru-wrapper] Rebuilding local package '$pkg' from source in ${PARU_WRAPPER_PROJECTS_DIR}..." >&2
+                    if [ "$DRY_RUN" = true ]; then
+                        echo "[paru-wrapper] DRY RUN: would run: (cd \"${PARU_WRAPPER_PROJECTS_DIR}/${pkg}\" && makepkg -sfi --noconfirm)" >&2
+                    else
+                        (cd "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}" && makepkg -sfi --noconfirm)
+                    fi
                 else
-                    echo "[paru-wrapper] Warning: Package '$pkg' is not in the AUR and no source found in ~/Projects/. Skipping." >&2
+                    echo "[paru-wrapper] Warning: Package '$pkg' is not in the AUR and no source found in ${PARU_WRAPPER_PROJECTS_DIR}. Skipping." >&2
                 fi
             else
                 filtered_targets+=("$pkg")
@@ -68,36 +106,32 @@ if [ "$is_transaction" = true ]; then
     # Update command-line arguments to exclude filtered-out local packages
     set -- "${other_args[@]}" "${filtered_targets[@]}"
 
-    # If the original command had targets, but all were filtered out, we can skip running paru
     if [ ${#targets[@]} -gt 0 ] && [ ${#filtered_targets[@]} -eq 0 ]; then
         echo "[paru-wrapper] All requested targets rebuilt locally. Skipping paru execution." >&2
         exit 0
     fi
 
     # 1. Get the list of packages to be upgraded
-    # We run paru -Quq to get the list of pending updates (including AUR)
-    upgrades=$(/usr/bin/paru -Quq 2>/dev/null)
+    upgrades=$(/usr/bin/paru -Quq 2>/dev/null || true)
 
     # 2. Get the list of all current orphans
-    orphans=$(pacman -Qtdq)
+    orphans=$(pacman -Qtdq || true)
 
     if [[ -n "$orphans" ]]; then
         # 3. Find dependencies of the new versions of the upgraded packages
         new_deps=""
         if [[ -n "$upgrades" ]]; then
-            # Query pacman sync database for repository packages dependencies
-            repo_deps=$(pacman -Si $upgrades 2>/dev/null | grep -E '^Depends On' | cut -d: -f2- | tr -d '>=<0-9.' | tr ' ' '\n' | sort -u)
-            
-            # Query AUR RPC (or paru info) for AUR package dependencies
+            repo_deps=$(pacman -Si $upgrades 2>/dev/null | grep -E '^Depends On' | cut -d: -f2- | tr -d '>=<0-9.' | tr ' ' '\n' | sort -u || true)
+
             aur_deps=""
             aur_upgrades=$(echo "$upgrades" | grep -vFf <(pacman -Slq 2>/dev/null) || true)
             if [[ -n "$aur_upgrades" ]]; then
-                aur_deps=$(/usr/bin/paru -Si $aur_upgrades 2>/dev/null | grep -E '^Depends On' | cut -d: -f2- | tr -d '>=<0-9.' | tr ' ' '\n' | sort -u)
+                aur_deps=$(/usr/bin/paru -Si $aur_upgrades 2>/dev/null | grep -E '^Depends On' | cut -d: -f2- | tr -d '>=<0-9.' | tr ' ' '\n' | sort -u || true)
             fi
-            
+
             new_deps=$(echo -e "${repo_deps}\n${aur_deps}" | sort -u)
         fi
-        
+
         # 4. Filter out any orphans that are in new_deps
         orphans_to_remove=""
         for orphan in $orphans; do
@@ -107,40 +141,44 @@ if [ "$is_transaction" = true ]; then
                 orphans_to_remove="$orphans_to_remove $orphan"
             fi
         done
-        
-        # 5. Clean the remaining orphans
+
+        # 5. Clean the remaining orphans (or show what would be removed)
         if [[ -n "$orphans_to_remove" ]]; then
-            echo "[paru-wrapper] Cleaning orphaned packages: $orphans_to_remove" >&2
-            sudo pacman -Rns --noconfirm $orphans_to_remove
+            echo "[paru-wrapper] Orphans to be removed:$orphans_to_remove" >&2
+            if [ "$DRY_RUN" = true ]; then
+                echo "[paru-wrapper] DRY RUN: would run: sudo pacman -Rns --noconfirm $orphans_to_remove" >&2
+            else
+                sudo pacman -Rns --noconfirm $orphans_to_remove
+            fi
         fi
     fi
 fi
 
-# 6. Execute the real paru command
+# Record start marker to detect newly-built packages
 start_marker="/tmp/paru_start_time.$$"
 touch "$start_marker"
 
+# Execute the real paru command
 /usr/bin/paru "$@"
 exit_code=$?
 
 if [ $exit_code -eq 0 ] && [ "$is_transaction" = true ]; then
     # Find all packages built during this paru run.
-    # Since PKGDEST is configured to /mnt/v/Data/makepkg/packages,
-    # any package built by makepkg under paru will be saved there.
-    mapfile -t new_pkgs < <(find /mnt/v/Data/makepkg/packages -name "*.pkg.tar.zst" -newer "$start_marker" 2>/dev/null)
-    
+    mapfile -t new_pkgs < <(find "${PARU_WRAPPER_REPO}" -name "*.pkg.tar.zst" -newer "$start_marker" 2>/dev/null || true)
+
     if [ ${#new_pkgs[@]} -gt 0 ]; then
         echo -e "\n[paru-wrapper] Detected ${#new_pkgs[@]} newly built package(s):" >&2
         for pkg in "${new_pkgs[@]}"; do
             echo "  -> $(basename "$pkg")" >&2
         done
-        
-        echo "[paru-wrapper] Automatically updating MKVPKG repository database..." >&2
-        # repo-add options:
-        # -R: removes old package files from disk after updating database
-        # -w: wait for lock file
-        repo-add -R -w /mnt/v/Data/makepkg/packages/MKVPKG.db.tar.gz "${new_pkgs[@]}"
-        echo "[paru-wrapper] MKVPKG repository database updated successfully." >&2
+
+        echo "[paru-wrapper] Automatically updating MKVPKG repository database at ${PARU_WRAPPER_REPO_DB}..." >&2
+        if [ "$DRY_RUN" = true ]; then
+            echo "[paru-wrapper] DRY RUN: would run: repo-add -R -w \"${PARU_WRAPPER_REPO_DB}\" \"${new_pkgs[@]}\"" >&2
+        else
+            repo-add -R -w "${PARU_WRAPPER_REPO_DB}" "${new_pkgs[@]}"
+            echo "[paru-wrapper] MKVPKG repository database updated successfully." >&2
+        fi
     fi
 fi
 

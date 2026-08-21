@@ -1,8 +1,11 @@
 post_install() {
-    echo "Creating paru-wrapper symlink at /home/v/.local/bin/paru..."
-    mkdir -p /home/v/.local/bin
-    ln -sf /usr/bin/paru-wrapper /home/v/.local/bin/paru
-    chown v:v /home/v/.local/bin/paru 2>/dev/null || true
+    echo "Creating paru-wrapper symlink at ${HOME}/.local/bin/paru..."
+    mkdir -p "${HOME}/.local/bin"
+    ln -sf /usr/bin/paru-wrapper "${HOME}/.local/bin/paru"
+    # Attempt to set ownership for the current user if available
+    if [ -n "${USER:-}" ]; then
+        chown "${USER}:${USER}" "${HOME}/.local/bin/paru" 2>/dev/null || true
+    fi
 }
 
 post_upgrade() {
@@ -11,5 +14,5 @@ post_upgrade() {
 
 post_remove() {
     echo "Removing paru-wrapper symlink..."
-    [ -L /home/v/.local/bin/paru ] && rm -f /home/v/.local/bin/paru
+    [ -L "${HOME}/.local/bin/paru" ] && rm -f "${HOME}/.local/bin/paru"
 }
