@@ -164,7 +164,11 @@ start_marker="/tmp/paru_start_time.$$"
 touch "$start_marker"
 
 if [ "$is_transaction" = true ]; then
-    /usr/bin/paru --pacman /usr/bin/pacman-wrapper "$@"
+    if [ "$FORCE_REBUILD" = "1" ] || [[ " $@ " =~ " --rebuild " ]]; then
+        /usr/bin/paru --rebuild --pacman /usr/bin/pacman-wrapper "$@"
+    else
+        /usr/bin/paru --pacman /usr/bin/pacman-wrapper "$@"
+    fi
 else
     /usr/bin/paru "$@"
 fi
