@@ -229,7 +229,7 @@ if [ $exit_code -eq 0 ] && [ "$is_transaction" = true ]; then
     # Trigger deferred hook updates once at the very end
     echo "[paru-wrapper] Running deferred completion and rebuild-check hooks..." >&2
     sudo /usr/bin/paru-completion-update || true
-    /usr/bin/rebuild-check || true
+    echo "${targets[@]}" | /usr/bin/rebuild-check || true
 fi
 
 rm -f "$start_marker"
