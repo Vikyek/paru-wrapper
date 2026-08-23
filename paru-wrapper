@@ -87,7 +87,12 @@ if [ "$is_transaction" = true ]; then
             filtered_targets+=("$pkg")
         elif [ -d "/home/v/Projects/$pkg" ] && [ -f "/home/v/Projects/$pkg/PKGBUILD" ]; then
             echo "[paru-wrapper] Rebuilding local package '$pkg' from source..." >&2
-            (cd "/home/v/Projects/$pkg" && makepkg -sfi --noconfirm)
+            if (cd "/home/v/Projects/$pkg" && makepkg -sfi --noconfirm); then
+                if command -v anneal >/dev/null; then
+                    echo "[paru-wrapper] Unmarking '$pkg' in anneal rebuild queue..." >&2
+                    sudo anneal unmark "$pkg" 2>/dev/null || true
+                fi
+            fi
         else
             # Not a local modified package, must be standard AUR package
             filtered_targets+=("$pkg")
