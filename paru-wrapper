@@ -36,12 +36,31 @@ if [ "$is_transaction" = true ]; then
     sudo ln -sf /dev/null /etc/pacman.d/hooks/paru-completion-update.hook
     sudo ln -sf /dev/null /etc/pacman.d/hooks/rebuild-check.hook
 
+    start_marker="/tmp/paru_start_time.$$"
+    touch "$start_marker"
+
     cleanup_hooks() {
+        # Restore pacman hooks
         sudo rm -f /etc/pacman.d/hooks/05-snap-pac-pre.hook \
                    /etc/pacman.d/hooks/zz-snap-pac-post.hook \
                    /etc/pacman.d/hooks/paru-completion-update.hook \
                    /etc/pacman.d/hooks/rebuild-check.hook 2>/dev/null || true
         rm -f /tmp/paru_total_packages /tmp/paru_completed_packages 2>/dev/null || true
+
+        # Automatically update MKVPKG repository database with any packages built during the wrapper run
+        if [ -f "$start_marker" ]; then
+            mapfile -t new_pkgs < <(find /mnt/v/Data/makepkg/packages -name "*.pkg.tar.zst" -newer "$start_marker" 2>/dev/null)
+            if [ ${#new_pkgs[@]} -gt 0 ]; then
+                echo -e "\n[paru-wrapper] Detected ${#new_pkgs[@]} newly built package(s):" >&2
+                for pkg in "${new_pkgs[@]}"; do
+                    echo "  -> $(basename "$pkg")" >&2
+                done
+                echo "[paru-wrapper] Automatically updating MKVPKG repository database..." >&2
+                repo-add -R -w /mnt/v/Data/makepkg/packages/MKVPKG.db.tar.gz "${new_pkgs[@]}"
+                echo "[paru-wrapper] MKVPKG repository database updated successfully." >&2
+            fi
+            rm -f "$start_marker"
+        fi
     }
     trap cleanup_hooks EXIT INT TERM
 
@@ -177,9 +196,6 @@ if [ "$is_transaction" = true ]; then
 fi
 
 # 6. Execute the real paru command
-start_marker="/tmp/paru_start_time.$$"
-touch "$start_marker"
-
 if [ "$is_transaction" = true ]; then
     if [ "$FORCE_REBUILD" = "1" ] || [[ " $@ " =~ " --rebuild " ]]; then
         /usr/bin/paru --rebuild --pacman /usr/bin/pacman-wrapper "$@"
@@ -192,8 +208,8 @@ fi
 exit_code=$?
 
 if [ "$is_transaction" = true ]; then
-    # Restore pacman hooks
-    echo "[paru-wrapper] Restoring pacman hooks..." >&2
+    # Restore pacman hooks and update database
+    echo "[paru-wrapper] Restoring pacman hooks and updating database..." >&2
     cleanup_hooks
 
     # Disable exit trap since we cleaned up explicitly
@@ -207,30 +223,10 @@ if [ "$is_transaction" = true ]; then
 fi
 
 if [ $exit_code -eq 0 ] && [ "$is_transaction" = true ]; then
-    # Find all packages built during this paru run.
-    # Since PKGDEST is configured to /mnt/v/Data/makepkg/packages,
-    # any package built by makepkg under paru will be saved there.
-    mapfile -t new_pkgs < <(find /mnt/v/Data/makepkg/packages -name "*.pkg.tar.zst" -newer "$start_marker" 2>/dev/null)
-    
-    if [ ${#new_pkgs[@]} -gt 0 ]; then
-        echo -e "\n[paru-wrapper] Detected ${#new_pkgs[@]} newly built package(s):" >&2
-        for pkg in "${new_pkgs[@]}"; do
-            echo "  -> $(basename "$pkg")" >&2
-        done
-        
-        echo "[paru-wrapper] Automatically updating MKVPKG repository database..." >&2
-        # repo-add options:
-        # -R: removes old package files from disk after updating database
-        # -w: wait for lock file
-        repo-add -R -w /mnt/v/Data/makepkg/packages/MKVPKG.db.tar.gz "${new_pkgs[@]}"
-        echo "[paru-wrapper] MKVPKG repository database updated successfully." >&2
-    fi
-
     # Trigger deferred hook updates once at the very end
     echo "[paru-wrapper] Running deferred completion and rebuild-check hooks..." >&2
     sudo /usr/bin/paru-completion-update || true
     echo "${targets[@]}" | sudo /usr/bin/rebuild-check || true
 fi
 
-rm -f "$start_marker"
 exit $exit_code
