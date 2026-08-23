@@ -21,6 +21,27 @@ else
 fi
 
 if [ "$is_transaction" = true ]; then
+    # Disable selected hooks to prevent snapper/completion/rebuild-check spam during intermediate package installations
+    echo "[paru-wrapper] Temporarily disabling redundant hooks..." >&2
+    sudo ln -sf /dev/null /etc/pacman.d/hooks/05-snap-pac-pre.hook
+    sudo ln -sf /dev/null /etc/pacman.d/hooks/zz-snap-pac-post.hook
+    sudo ln -sf /dev/null /etc/pacman.d/hooks/paru-completion-update.hook
+    sudo ln -sf /dev/null /etc/pacman.d/hooks/rebuild-check.hook
+
+    cleanup_hooks() {
+        sudo rm -f /etc/pacman.d/hooks/05-snap-pac-pre.hook \
+                   /etc/pacman.d/hooks/zz-snap-pac-post.hook \
+                   /etc/pacman.d/hooks/paru-completion-update.hook \
+                   /etc/pacman.d/hooks/rebuild-check.hook 2>/dev/null || true
+    }
+    trap cleanup_hooks EXIT INT TERM
+
+    # Take a single manual pre-transaction snapper snapshot
+    if command -v snapper >/dev/null; then
+        PRE_SNAP_ID=$(sudo snapper -c root create -d "paru-wrapper pre-transaction" -t pre -p)
+        export PRE_SNAP_ID
+    fi
+
     # Prune outdated unmodified packages from MKVPKG using helper script to trigger upgrades from AUR
     if [ -x "/usr/bin/update_mkvpkg_aur.py" ]; then
         /usr/bin/update_mkvpkg_aur.py
@@ -130,6 +151,21 @@ touch "$start_marker"
 /usr/bin/paru "$@"
 exit_code=$?
 
+if [ "$is_transaction" = true ]; then
+    # Restore pacman hooks
+    echo "[paru-wrapper] Restoring pacman hooks..." >&2
+    cleanup_hooks
+
+    # Disable exit trap since we cleaned up explicitly
+    trap - EXIT INT TERM
+
+    # Take a manual post-transaction snapper snapshot
+    if [[ -n "$PRE_SNAP_ID" ]]; then
+        echo "[paru-wrapper] Taking post-transaction snapper snapshot..." >&2
+        sudo snapper -c root create -d "paru-wrapper post-transaction" -t post --pre-number "$PRE_SNAP_ID"
+    fi
+fi
+
 if [ $exit_code -eq 0 ] && [ "$is_transaction" = true ]; then
     # Find all packages built during this paru run.
     # Since PKGDEST is configured to /mnt/v/Data/makepkg/packages,
@@ -149,6 +185,11 @@ if [ $exit_code -eq 0 ] && [ "$is_transaction" = true ]; then
         repo-add -R -w /mnt/v/Data/makepkg/packages/MKVPKG.db.tar.gz "${new_pkgs[@]}"
         echo "[paru-wrapper] MKVPKG repository database updated successfully." >&2
     fi
+
+    # Trigger deferred hook updates once at the very end
+    echo "[paru-wrapper] Running deferred completion and rebuild-check hooks..." >&2
+    sudo /usr/bin/paru-completion-update || true
+    /usr/bin/rebuild-check || true
 fi
 
 rm -f "$start_marker"
