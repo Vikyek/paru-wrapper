@@ -93,6 +93,23 @@ if [ "$is_transaction" = true ]; then
                     sudo anneal unmark "$pkg" 2>/dev/null || true
                 fi
             fi
+        elif [ "$FORCE_REBUILD" = "1" ]; then
+            # Force rebuild standard AUR package from source to link against new libraries
+            echo "[paru-wrapper] FORCE_REBUILD active. Rebuilding AUR package '$pkg' from source..." >&2
+            build_dir="/tmp/aur-build-$pkg"
+            rm -rf "$build_dir"
+            if git clone --depth 1 "https://aur.archlinux.org/$pkg.git" "$build_dir" 2>/dev/null; then
+                if (cd "$build_dir" && makepkg -sfi --noconfirm); then
+                    if command -v anneal >/dev/null; then
+                        echo "[paru-wrapper] Unmarking '$pkg' in anneal rebuild queue..." >&2
+                        sudo anneal unmark "$pkg" 2>/dev/null || true
+                    fi
+                fi
+                rm -rf "$build_dir"
+            else
+                echo "[paru-wrapper] Warning: Failed to clone '$pkg' from AUR. Passing to paru." >&2
+                filtered_targets+=("$pkg")
+            fi
         else
             # Not a local modified package, must be standard AUR package
             filtered_targets+=("$pkg")
