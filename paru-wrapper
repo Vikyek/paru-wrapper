@@ -80,64 +80,17 @@ if [ "$is_transaction" = true ]; then
         return 1
     }
 
-    # Separate targets into official and non-official
-    official_targets=()
-    non_official_targets=()
+    # Filter targets and rebuild local packages
+    filtered_targets=()
     for pkg in "${targets[@]}"; do
         if is_official_pkg "$pkg"; then
-            official_targets+=("$pkg")
-        else
-            non_official_targets+=("$pkg")
-        fi
-    done
-
-    # Batch query AUR for all non-official packages
-    aur_targets=()
-    local_targets=()
-    if [ ${#non_official_targets[@]} -gt 0 ]; then
-        # Run inline python script to batch query the AUR RPC
-        aur_results=$(python3 -c '
-import sys, urllib.request, json
-pkgs = sys.argv[1:]
-if not pkgs: sys.exit(0)
-chunk_size = 100
-in_aur = set()
-for i in range(0, len(pkgs), chunk_size):
-    chunk = pkgs[i:i+chunk_size]
-    args = "&".join(f"arg[]={p}" for p in chunk)
-    url = f"https://aur.archlinux.org/rpc/?v=5&type=info&{args}"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req) as response:
-            data = json.loads(response.read().decode())
-            if data.get("results"):
-                for r in data["results"]:
-                    in_aur.add(r["Name"])
-    except Exception as e:
-        print(f"Error querying AUR for batch: {e}", file=sys.stderr)
-for p in pkgs:
-    if p in in_aur:
-        print(p)
-' "${non_official_targets[@]}" 2>/dev/null)
-
-        # Parse results
-        for pkg in "${non_official_targets[@]}"; do
-            if echo "$aur_results" | grep -Fqx "$pkg" >/dev/null; then
-                aur_targets+=("$pkg")
-            else
-                local_targets+=("$pkg")
-            fi
-        done
-    fi
-
-    # Process and filter targets
-    filtered_targets=("${official_targets[@]}" "${aur_targets[@]}")
-    for pkg in "${local_targets[@]}"; do
-        if [ -d "/home/v/Projects/$pkg" ] && [ -f "/home/v/Projects/$pkg/PKGBUILD" ]; then
+            filtered_targets+=("$pkg")
+        elif [ -d "/home/v/Projects/$pkg" ] && [ -f "/home/v/Projects/$pkg/PKGBUILD" ]; then
             echo "[paru-wrapper] Rebuilding local package '$pkg' from source..." >&2
             (cd "/home/v/Projects/$pkg" && makepkg -sfi --noconfirm)
         else
-            echo "[paru-wrapper] Warning: Package '$pkg' is not in the AUR and no source found in ~/Projects/. Skipping." >&2
+            # Not a local modified package, must be standard AUR package
+            filtered_targets+=("$pkg")
         fi
     done
 
