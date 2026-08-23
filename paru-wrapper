@@ -1,5 +1,13 @@
 #!/bin/bash
 
+# Safely clean up any stale null symlinks from a previously interrupted transaction
+for hook in 05-snap-pac-pre.hook zz-snap-pac-post.hook paru-completion-update.hook rebuild-check.hook; do
+    if [ -L "/etc/pacman.d/hooks/$hook" ] && [ "$(readlink "/etc/pacman.d/hooks/$hook")" = "/dev/null" ]; then
+        echo "[paru-wrapper] Warning: Detected stale disabled hook '$hook' from a previous run. Restoring..." >&2
+        sudo rm -f "/etc/pacman.d/hooks/$hook"
+    fi
+done
+
 # Only run orphan cleaning if we are doing a system upgrade or installing/upgrading packages.
 # Paru arguments that start an install or upgrade transaction:
 # -S, -Syu, -Syyu, -Sy, -U, or no arguments (which defaults to interactive system upgrade).
@@ -33,6 +41,7 @@ if [ "$is_transaction" = true ]; then
                    /etc/pacman.d/hooks/zz-snap-pac-post.hook \
                    /etc/pacman.d/hooks/paru-completion-update.hook \
                    /etc/pacman.d/hooks/rebuild-check.hook 2>/dev/null || true
+        rm -f /tmp/paru_total_packages /tmp/paru_completed_packages 2>/dev/null || true
     }
     trap cleanup_hooks EXIT INT TERM
 
@@ -106,6 +115,15 @@ if [ "$is_transaction" = true ]; then
     # We run paru -Quq to get the list of pending updates (including AUR)
     upgrades=$(/usr/bin/paru -Quq 2>/dev/null)
 
+    # Write total packages to /tmp/paru_total_packages for progress counter
+    if [[ -n "$upgrades" ]]; then
+        total_pkgs=$(echo "$upgrades" | grep -v "^$" | wc -l)
+        echo "$total_pkgs" > /tmp/paru_total_packages
+        echo "0" > /tmp/paru_completed_packages
+    else
+        rm -f /tmp/paru_total_packages /tmp/paru_completed_packages 2>/dev/null
+    fi
+
     # 2. Get the list of all current orphans
     orphans=$(pacman -Qtdq)
 
@@ -148,7 +166,11 @@ fi
 start_marker="/tmp/paru_start_time.$$"
 touch "$start_marker"
 
-/usr/bin/paru "$@"
+if [ "$is_transaction" = true ]; then
+    /usr/bin/paru --pacman /usr/bin/pacman-wrapper "$@"
+else
+    /usr/bin/paru "$@"
+fi
 exit_code=$?
 
 if [ "$is_transaction" = true ]; then
