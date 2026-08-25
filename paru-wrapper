@@ -14,37 +14,56 @@ done
 is_transaction=false
 if [ $# -eq 0 ]; then
     is_transaction=true
-else
-    for arg in "$@"; do
-        if [[ "$arg" =~ ^-S[a-zA-Z]*$ ]]; then
-            if [[ ! "$arg" =~ [silgpq] ]]; then
-                is_transaction=true
-                break
-            fi
-        elif [[ "$arg" =~ ^-U[a-zA-Z]*$ ]]; then
+    set -- "-Syu"
+fi
+
+for arg in "$@"; do
+    if [[ "$arg" =~ ^-S[a-zA-Z]*$ ]]; then
+        if [[ ! "$arg" =~ [silgpq] ]]; then
             is_transaction=true
             break
         fi
-    done
-fi
+    elif [[ "$arg" =~ ^-U[a-zA-Z]*$ ]]; then
+        is_transaction=true
+        break
+    fi
+done
 
 if [ "$is_transaction" = true ]; then
-    # Disable selected hooks to prevent snapper/completion/rebuild-check spam during intermediate package installations
-    echo "[paru-wrapper] Temporarily disabling redundant hooks..." >&2
-    sudo ln -sf /dev/null /etc/pacman.d/hooks/05-snap-pac-pre.hook
-    sudo ln -sf /dev/null /etc/pacman.d/hooks/zz-snap-pac-post.hook
-    sudo ln -sf /dev/null /etc/pacman.d/hooks/paru-completion-update.hook
-    sudo ln -sf /dev/null /etc/pacman.d/hooks/rebuild-check.hook
+    # Detect if we are running in an anneal rebuild session
+    is_anneal=false
+    curr_pid=$$
+    while [ -n "$curr_pid" ] && [ "$curr_pid" -ne 1 ]; do
+        proc_name=$(ps -o comm= -p "$curr_pid" 2>/dev/null)
+        if [ "$proc_name" = "anneal" ]; then
+            is_anneal=true
+            break
+        fi
+        curr_pid=$(ps -o ppid= -p "$curr_pid" 2>/dev/null | tr -d '[:space:]')
+    done
+
+    hooks_disabled=false
+    if [ "$is_anneal" = true ] || [ "$FORCE_REBUILD" = "1" ]; then
+        # Disable selected hooks to prevent snapper/completion/rebuild-check spam during intermediate package installations
+        echo "[paru-wrapper] Temporarily disabling redundant hooks..." >&2
+        sudo ln -sf /dev/null /etc/pacman.d/hooks/05-snap-pac-pre.hook
+        sudo ln -sf /dev/null /etc/pacman.d/hooks/zz-snap-pac-post.hook
+        sudo ln -sf /dev/null /etc/pacman.d/hooks/paru-completion-update.hook
+        sudo ln -sf /dev/null /etc/pacman.d/hooks/rebuild-check.hook
+        hooks_disabled=true
+    fi
 
     start_marker="/tmp/paru_start_time.$$"
     touch "$start_marker"
 
     cleanup_hooks() {
         # Restore pacman hooks
-        sudo rm -f /etc/pacman.d/hooks/05-snap-pac-pre.hook \
-                   /etc/pacman.d/hooks/zz-snap-pac-post.hook \
-                   /etc/pacman.d/hooks/paru-completion-update.hook \
-                   /etc/pacman.d/hooks/rebuild-check.hook 2>/dev/null || true
+        if [ "$hooks_disabled" = true ]; then
+            sudo rm -f /etc/pacman.d/hooks/05-snap-pac-pre.hook \
+                       /etc/pacman.d/hooks/zz-snap-pac-post.hook \
+                       /etc/pacman.d/hooks/paru-completion-update.hook \
+                       /etc/pacman.d/hooks/rebuild-check.hook 2>/dev/null || true
+        fi
         rm -f /tmp/paru_total_packages /tmp/paru_completed_packages 2>/dev/null || true
 
         # Automatically update MKVPKG repository database with any packages built during the wrapper run
@@ -65,7 +84,7 @@ if [ "$is_transaction" = true ]; then
     trap cleanup_hooks EXIT INT TERM
 
     # Take a single manual pre-transaction snapper snapshot
-    if command -v snapper >/dev/null; then
+    if [ "$hooks_disabled" = true ] && command -v snapper >/dev/null; then
         PRE_SNAP_ID=$(sudo snapper -c root create -d "paru-wrapper pre-transaction" -t pre -p)
         export PRE_SNAP_ID
     fi
@@ -209,20 +228,24 @@ exit_code=$?
 
 if [ "$is_transaction" = true ]; then
     # Restore pacman hooks and update database
-    echo "[paru-wrapper] Restoring pacman hooks and updating database..." >&2
-    cleanup_hooks
+    if [ "$hooks_disabled" = true ]; then
+        echo "[paru-wrapper] Restoring pacman hooks and updating database..." >&2
+        cleanup_hooks
+    else
+        cleanup_hooks
+    fi
 
     # Disable exit trap since we cleaned up explicitly
     trap - EXIT INT TERM
 
     # Take a manual post-transaction snapper snapshot
-    if [[ -n "$PRE_SNAP_ID" ]]; then
+    if [ "$hooks_disabled" = true ] && [[ -n "$PRE_SNAP_ID" ]]; then
         echo "[paru-wrapper] Taking post-transaction snapper snapshot..." >&2
         sudo snapper -c root create -d "paru-wrapper post-transaction" -t post --pre-number "$PRE_SNAP_ID"
     fi
 fi
 
-if [ $exit_code -eq 0 ] && [ "$is_transaction" = true ]; then
+if [ $exit_code -eq 0 ] && [ "$is_transaction" = true ] && [ "$hooks_disabled" = true ]; then
     # Trigger deferred hook updates once at the very end
     echo "[paru-wrapper] Running deferred completion and rebuild-check hooks..." >&2
     sudo /usr/bin/paru-completion-update || true
