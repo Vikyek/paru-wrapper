@@ -18,7 +18,13 @@ makepkg -si
 
 ## Manual Installation
 
-You can also run the automated installation script:
+You can install manually using the provided `Makefile`:
+
+```bash
+make install
+```
+
+Or run the automated installation script:
 
 ```bash
 ./install.sh
