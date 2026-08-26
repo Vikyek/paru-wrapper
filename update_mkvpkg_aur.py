@@ -9,16 +9,18 @@ projects_dir = "/home/v/Projects"
 
 def run_cmd(cmd):
     try:
-        return subprocess.check_output(cmd, shell=True, text=True).strip()
+        return subprocess.check_output(cmd, text=True).strip()
+    except subprocess.CalledProcessError:
+        return ""
     except Exception:
         return ""
 
 def get_mkvpkg_packages():
-    output = run_cmd("pacman -Slq MKVPKG")
+    output = run_cmd(["pacman", "-Slq", "MKVPKG"])
     return output.splitlines() if output else []
 
 def get_local_ver(pkg):
-    output = run_cmd(f"pacman -Si MKVPKG/{pkg}")
+    output = run_cmd(["pacman", "-Si", f"MKVPKG/{pkg}"])
     for line in output.splitlines():
         if line.startswith("Version"):
             return line.split(":")[1].strip()
@@ -70,13 +72,13 @@ def main():
                 res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip())
                 if res > 0:
                     print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from MKVPKG to trigger upgrade...")
-                    subprocess.run(["repo-remove", "-w", db_path, pkg])
+                    subprocess.run(["repo-remove", "-w", db_path, pkg], check=True)
                     db_changed = True
             except Exception as e:
                 print(f"Error comparing version for {pkg}: {e}")
 
     if db_changed:
-        subprocess.run(["sudo", "pacman", "-Sy"])
+        subprocess.run(["sudo", "pacman", "-Sy"], check=True)
 
 if __name__ == "__main__":
     main()

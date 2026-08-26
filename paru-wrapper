@@ -43,6 +43,9 @@ if [ "$is_transaction" = true ]; then
     done
 
     hooks_disabled=false
+    CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/paru-wrapper"
+    mkdir -p "$CACHE_DIR"
+
     if [ "$is_anneal" = true ] || [ "$FORCE_REBUILD" = "1" ]; then
         # Disable selected hooks to prevent snapper/completion/rebuild-check spam during intermediate package installations
         echo "[paru-wrapper] Temporarily disabling redundant hooks..." >&2
@@ -53,8 +56,7 @@ if [ "$is_transaction" = true ]; then
         hooks_disabled=true
     fi
 
-    start_marker="/tmp/paru_start_time.$$"
-    touch "$start_marker"
+    start_marker=$(mktemp)
 
     cleanup_hooks() {
         # Restore pacman hooks
@@ -64,7 +66,7 @@ if [ "$is_transaction" = true ]; then
                        /etc/pacman.d/hooks/paru-completion-update.hook \
                        /etc/pacman.d/hooks/rebuild-check.hook 2>/dev/null || true
         fi
-        rm -f /tmp/paru_total_packages /tmp/paru_completed_packages 2>/dev/null || true
+        rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
 
         # Automatically update MKVPKG repository database with any packages built during the wrapper run
         if [ -f "$start_marker" ]; then
@@ -134,8 +136,7 @@ if [ "$is_transaction" = true ]; then
         elif [ "$FORCE_REBUILD" = "1" ]; then
             # Force rebuild standard AUR package from source to link against new libraries
             echo "[paru-wrapper] FORCE_REBUILD active. Rebuilding AUR package '$pkg' from source..." >&2
-            build_dir="/tmp/aur-build-$pkg"
-            rm -rf "$build_dir"
+            build_dir=$(mktemp -d)
             if git clone --depth 1 "https://aur.archlinux.org/$pkg.git" "$build_dir" 2>/dev/null; then
                 if (cd "$build_dir" && makepkg -sfi --noconfirm); then
                     if command -v anneal >/dev/null; then
@@ -146,6 +147,7 @@ if [ "$is_transaction" = true ]; then
                 rm -rf "$build_dir"
             else
                 echo "[paru-wrapper] Warning: Failed to clone '$pkg' from AUR. Passing to paru." >&2
+                rm -rf "$build_dir"
                 filtered_targets+=("$pkg")
             fi
         else
@@ -167,13 +169,13 @@ if [ "$is_transaction" = true ]; then
     # We run paru -Quq to get the list of pending updates (including AUR)
     upgrades=$(/usr/bin/paru -Quq 2>/dev/null)
 
-    # Write total packages to /tmp/paru_total_packages for progress counter
+    # Write total packages to paru_total_packages for progress counter
     if [[ -n "$upgrades" ]]; then
-        total_pkgs=$(echo "$upgrades" | grep -v "^$" | wc -l)
-        echo "$total_pkgs" > /tmp/paru_total_packages
-        echo "0" > /tmp/paru_completed_packages
+        total_pkgs=$(echo "$upgrades" | grep -v "^$" | grep -c "")
+        echo "$total_pkgs" > "$CACHE_DIR/paru_total_packages"
+        echo "0" > "$CACHE_DIR/paru_completed_packages"
     else
-        rm -f /tmp/paru_total_packages /tmp/paru_completed_packages 2>/dev/null
+        rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" 2>/dev/null
     fi
 
     # 2. Get the list of all current orphans
@@ -184,39 +186,39 @@ if [ "$is_transaction" = true ]; then
         new_deps=""
         if [[ -n "$upgrades" ]]; then
             # Query pacman sync database for repository packages dependencies
-            repo_deps=$(pacman -Si $upgrades 2>/dev/null | grep -E '^Depends On' | cut -d: -f2- | tr -d '>=<0-9.' | tr ' ' '\n' | sort -u)
+            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | grep -E '^Depends On' | cut -d: -f2- | tr -d '>=<0-9.' | tr ' ' '\n' | sort -u)
             
             # Query AUR RPC (or paru info) for AUR package dependencies
             aur_deps=""
             aur_upgrades=$(echo "$upgrades" | grep -vFf <(pacman -Slq 2>/dev/null) || true)
             if [[ -n "$aur_upgrades" ]]; then
-                aur_deps=$(/usr/bin/paru -Si $aur_upgrades 2>/dev/null | grep -E '^Depends On' | cut -d: -f2- | tr -d '>=<0-9.' | tr ' ' '\n' | sort -u)
+                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru -Si 2>/dev/null | grep -E '^Depends On' | cut -d: -f2- | tr -d '>=<0-9.' | tr ' ' '\n' | sort -u)
             fi
             
             new_deps=$(echo -e "${repo_deps}\n${aur_deps}" | sort -u)
         fi
         
         # 4. Filter out any orphans that are in new_deps
-        orphans_to_remove=""
+        orphans_to_remove=()
         for orphan in $orphans; do
             if echo "$new_deps" | grep -Fqx "$orphan"; then
                 echo "[paru-wrapper] Preserving orphan package '$orphan' (will be needed by incoming updates)." >&2
             else
-                orphans_to_remove="$orphans_to_remove $orphan"
+                orphans_to_remove+=("$orphan")
             fi
         done
         
         # 5. Clean the remaining orphans
-        if [[ -n "$orphans_to_remove" ]]; then
-            echo "[paru-wrapper] Cleaning orphaned packages: $orphans_to_remove" >&2
-            sudo pacman -Rns --noconfirm $orphans_to_remove
+        if [[ ${#orphans_to_remove[@]} -gt 0 ]]; then
+            echo "[paru-wrapper] Cleaning orphaned packages: ${orphans_to_remove[*]}" >&2
+            sudo pacman -Rns --noconfirm "${orphans_to_remove[@]}"
         fi
     fi
 fi
 
 # 6. Execute the real paru command
 if [ "$is_transaction" = true ]; then
-    if [ "$FORCE_REBUILD" = "1" ] || [[ " $@ " =~ " --rebuild " ]]; then
+    if [ "$FORCE_REBUILD" = "1" ] || [[ " $* " =~ " --rebuild " ]]; then
         /usr/bin/paru --rebuild --pacman /usr/bin/pacman-wrapper "$@"
     else
         /usr/bin/paru --pacman /usr/bin/pacman-wrapper "$@"

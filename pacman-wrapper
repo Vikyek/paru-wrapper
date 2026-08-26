@@ -1,6 +1,13 @@
 #!/bin/bash
 # Check if we are running in a wrapper transaction
-if [ -f "/tmp/paru_total_packages" ] && [ -f "/tmp/paru_completed_packages" ]; then
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/paru-wrapper"
+if [ -n "$SUDO_USER" ]; then
+    # When running under sudo (e.g. as root), use the calling user's cache dir
+    USER_HOME=$(eval echo "~$SUDO_USER")
+    CACHE_DIR="$USER_HOME/.cache/paru-wrapper"
+fi
+
+if [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$CACHE_DIR/paru_completed_packages" ]; then
     # We only increment progress for install or upgrade commands
     is_install=false
     for arg in "$@"; do
@@ -11,11 +18,11 @@ if [ -f "/tmp/paru_total_packages" ] && [ -f "/tmp/paru_completed_packages" ]; t
     done
 
     if [ "$is_install" = true ]; then
-        total=$(cat /tmp/paru_total_packages 2>/dev/null || echo "0")
-        completed=$(cat /tmp/paru_completed_packages 2>/dev/null || echo "0")
+        total=$(cat "$CACHE_DIR/paru_total_packages" 2>/dev/null || echo "0")
+        completed=$(cat "$CACHE_DIR/paru_completed_packages" 2>/dev/null || echo "0")
         if [ "$total" -gt 0 ]; then
             completed=$((completed + 1))
-            echo "$completed" > /tmp/paru_completed_packages
+            echo "$completed" > "$CACHE_DIR/paru_completed_packages"
             percent=$((completed * 100 / total))
             echo -e "\n\e[1;32m[paru-wrapper] Progress: $completed / $total packages completed ($percent%)\e[0m\n" >&2
         fi
