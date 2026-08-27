@@ -29,7 +29,7 @@ def get_mkvpkg_packages_and_versions():
     if output:
         for line in output.splitlines():
             parts = line.split()
-            if len(parts) >= 3:
+            if len(parts) >= 3 and parts[0] == repo_name:
                 # parts[0] is repo, parts[1] is name, parts[2] is version
                 packages[parts[1]] = parts[2]
     return packages

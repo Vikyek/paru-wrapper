@@ -3,7 +3,7 @@
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/paru-wrapper"
 if [ -n "$SUDO_USER" ]; then
     # When running under sudo (e.g. as root), use the calling user's cache dir
-    USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    USER_HOME=$(eval echo "~$SUDO_USER")
     CACHE_DIR="$USER_HOME/.cache/paru-wrapper"
 fi
 

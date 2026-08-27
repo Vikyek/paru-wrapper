@@ -6,3 +6,6 @@
 **Action:** Use pure bash substring matching (e.g. `[[ "$new_deps_padded" == *$'
 '"$orphan"$'
 '* ]]`) to process lists efficiently without leaving the shell.
+## 2023-10-24 - Dependency parsing bug with tr
+**Learning:** Using `tr -d '>=<0-9.'` to strip version operators out of package names is extremely dangerous because it corrupts any package that genuinely has numbers in its name (e.g. gcc11 -> gcc, lib32-glibc -> lib-glibc).
+**Action:** Use `sed 's/[<>=].*//'` or similar regex that stops exactly at the version operators to safely truncate package dependency strings.
