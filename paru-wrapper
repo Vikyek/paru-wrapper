@@ -366,7 +366,17 @@ if [ "$is_transaction" = true ]; then
         
         # 5. Clean the remaining orphans
         if [[ ${#orphans_to_remove[@]} -gt 0 ]]; then
-            echo "[paru-wrapper] Cleaning orphaned packages: ${orphans_to_remove[*]}" >&2
+            if [ -z "${NO_COLOR:-}" ]; then
+                c_info='\e[1;34m'
+                c_reset='\e[0m'
+            else
+                c_info=''
+                c_reset=''
+            fi
+            echo -e "\n${c_info}[paru-wrapper]${c_reset} Cleaning ${#orphans_to_remove[@]} orphaned package(s):" >&2
+            for pkg in "${orphans_to_remove[@]}"; do
+                echo "  -> $pkg" >&2
+            done
             if [ "$DRY_RUN" = true ]; then
                 echo "[paru-wrapper] DRY RUN: would run: sudo pacman -Rns --noconfirm ${orphans_to_remove[*]}" >&2
             else
