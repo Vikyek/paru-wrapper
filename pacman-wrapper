@@ -1,15 +1,20 @@
 #!/bin/bash
 # Check if we are running in a wrapper transaction
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/paru-wrapper"
 if [ -n "$SUDO_USER" ]; then
     # When running under sudo (e.g. as root), use the calling user's cache dir
     USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
     if [ -n "$USER_HOME" ]; then
         CACHE_DIR="$USER_HOME/.cache/paru-wrapper"
     fi
+else
+    if [ -n "${XDG_CACHE_HOME:-}" ]; then
+        CACHE_DIR="${XDG_CACHE_HOME}/paru-wrapper"
+    elif [ -n "${HOME:-}" ]; then
+        CACHE_DIR="${HOME}/.cache/paru-wrapper"
+    fi
 fi
 
-if [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$CACHE_DIR/paru_completed_packages" ]; then
+if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$CACHE_DIR/paru_completed_packages" ]; then
     # We only increment progress for install or upgrade commands
     is_install=false
     for arg in "$@"; do
