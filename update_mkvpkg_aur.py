@@ -4,8 +4,9 @@ import os
 import urllib.request
 import json
 
-db_path = "/mnt/v/Data/makepkg/packages/MKVPKG.db.tar.gz"
-projects_dir = "/home/v/Projects"
+db_path = os.environ.get("PARU_WRAPPER_REPO_DB", "")
+projects_dir = os.environ.get("PARU_WRAPPER_PROJECTS_DIR", "")
+repo_name = os.environ.get("PARU_WRAPPER_REPO", "")
 
 def run_cmd(cmd):
     try:
@@ -16,11 +17,15 @@ def run_cmd(cmd):
         return ""
 
 def get_mkvpkg_packages():
-    output = run_cmd(["pacman", "-Slq", "MKVPKG"])
+    if not repo_name:
+        return []
+    output = run_cmd(["pacman", "-Slq", repo_name])
     return output.splitlines() if output else []
 
 def get_local_ver(pkg):
-    output = run_cmd(["pacman", "-Si", f"MKVPKG/{pkg}"])
+    if not repo_name:
+        return None
+    output = run_cmd(["pacman", "-Si", f"{repo_name}/{pkg}"])
     for line in output.splitlines():
         if line.startswith("Version"):
             return line.split(":")[1].strip()
@@ -43,6 +48,8 @@ def query_aur(packages):
     return results
 
 def main():
+    if not db_path or not projects_dir or not repo_name:
+        return
     if not os.path.exists(db_path):
         return
 
@@ -71,7 +78,7 @@ def main():
             try:
                 res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip())
                 if res > 0:
-                    print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from MKVPKG to trigger upgrade...")
+                    print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from {repo_name} to trigger upgrade...")
                     subprocess.run(["repo-remove", "-w", db_path, pkg], check=True)
                     db_changed = True
             except Exception as e:

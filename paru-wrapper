@@ -1,5 +1,100 @@
 #!/bin/bash
 
+# Configuration
+PARU_WRAPPER_REPO=""
+PARU_WRAPPER_REPO_DB=""
+PARU_WRAPPER_PROJECTS_DIR=""
+
+if [ -f "/etc/paru-wrapper.conf" ]; then
+    source "/etc/paru-wrapper.conf"
+fi
+
+if [ -f "$HOME/.config/paru-wrapper/paru-wrapper.conf" ]; then
+    source "$HOME/.config/paru-wrapper/paru-wrapper.conf"
+fi
+
+if [ "$1" = "--init-repo" ]; then
+    if [ "$#" -ne 4 ]; then
+        echo "Usage: paru-wrapper --init-repo <repo_name> <repo_dir> <projects_dir>"
+        echo "Example: paru-wrapper --init-repo MYREPO /var/cache/pacman/myrepo ~/Projects"
+        exit 1
+    fi
+    REPO_NAME="$2"
+    REPO_DIR="$3"
+    PROJ_DIR="$4"
+    REPO_DB="$REPO_DIR/$REPO_NAME.db.tar.gz"
+
+    mkdir -p "$REPO_DIR"
+    mkdir -p "$PROJ_DIR"
+
+    # Initialize empty repo if it doesn't exist
+    if [ ! -f "$REPO_DB" ]; then
+        # Create a dummy package just to initialize the db, then remove it
+        DUMMY_DIR=$(mktemp -d)
+        cat << 'EOF' > "$DUMMY_DIR/PKGBUILD"
+pkgname=dummy
+pkgver=1
+pkgrel=1
+pkgdesc="Dummy package"
+arch=('any')
+license=('GPL')
+EOF
+        (cd "$DUMMY_DIR" && makepkg -s --noconfirm >/dev/null 2>&1)
+        repo-add "$REPO_DB" "$DUMMY_DIR/dummy-1-1-any.pkg.tar.zst" >/dev/null 2>&1
+        repo-remove "$REPO_DB" dummy >/dev/null 2>&1
+        rm -rf "$DUMMY_DIR"
+        echo "Initialized empty repository at $REPO_DB"
+    fi
+
+    CONFIG_DIR="$HOME/.config/paru-wrapper"
+    mkdir -p "$CONFIG_DIR"
+
+    cat << EOF > "$CONFIG_DIR/paru-wrapper.conf"
+PARU_WRAPPER_REPO="$REPO_NAME"
+PARU_WRAPPER_REPO_DB="$REPO_DB"
+PARU_WRAPPER_PROJECTS_DIR="$PROJ_DIR"
+EOF
+    echo "Configuration written to $CONFIG_DIR/paru-wrapper.conf"
+    echo ""
+    echo "To use this repository, please add the following to /etc/pacman.conf:"
+    echo ""
+    echo "[$REPO_NAME]"
+    echo "SigLevel = Optional TrustAll"
+    echo "Server = file://$REPO_DIR"
+    echo ""
+    exit 0
+fi
+
+if [ "$1" = "--connect-repo" ]; then
+    if [ "$#" -ne 4 ]; then
+        echo "Usage: paru-wrapper --connect-repo <repo_name> <repo_dir> <projects_dir>"
+        echo "Example: paru-wrapper --connect-repo MYREPO /mnt/shared/myrepo ~/Projects"
+        exit 1
+    fi
+    REPO_NAME="$2"
+    REPO_DIR="$3"
+    PROJ_DIR="$4"
+    REPO_DB="$REPO_DIR/$REPO_NAME.db.tar.gz"
+
+    CONFIG_DIR="$HOME/.config/paru-wrapper"
+    mkdir -p "$CONFIG_DIR"
+
+    cat << EOF > "$CONFIG_DIR/paru-wrapper.conf"
+PARU_WRAPPER_REPO="$REPO_NAME"
+PARU_WRAPPER_REPO_DB="$REPO_DB"
+PARU_WRAPPER_PROJECTS_DIR="$PROJ_DIR"
+EOF
+    echo "Configuration written to $CONFIG_DIR/paru-wrapper.conf"
+    echo ""
+    echo "To connect to this repository, please add the following to /etc/pacman.conf:"
+    echo ""
+    echo "[$REPO_NAME]"
+    echo "SigLevel = Optional TrustAll"
+    echo "Server = file://$REPO_DIR"
+    echo ""
+    exit 0
+fi
+
 # Safely clean up any stale null symlinks from a previously interrupted transaction
 for hook in 05-snap-pac-pre.hook zz-snap-pac-post.hook paru-completion-update.hook rebuild-check.hook; do
     if [ -L "/etc/pacman.d/hooks/$hook" ] && [ "$(readlink "/etc/pacman.d/hooks/$hook")" = "/dev/null" ]; then
@@ -68,17 +163,18 @@ if [ "$is_transaction" = true ]; then
         fi
         rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
 
-        # Automatically update MKVPKG repository database with any packages built during the wrapper run
-        if [ -f "$start_marker" ]; then
-            mapfile -t new_pkgs < <(find /mnt/v/Data/makepkg/packages -name "*.pkg.tar.zst" -newer "$start_marker" 2>/dev/null)
+        # Automatically update custom repository database with any packages built during the wrapper run
+        if [ -n "$PARU_WRAPPER_REPO" ] && [ -f "$start_marker" ]; then
+            REPO_DIR=$(dirname "$PARU_WRAPPER_REPO_DB")
+            mapfile -t new_pkgs < <(find "$REPO_DIR" -name "*.pkg.tar.zst" -newer "$start_marker" 2>/dev/null)
             if [ ${#new_pkgs[@]} -gt 0 ]; then
                 echo -e "\n[paru-wrapper] Detected ${#new_pkgs[@]} newly built package(s):" >&2
                 for pkg in "${new_pkgs[@]}"; do
                     echo "  -> $(basename "$pkg")" >&2
                 done
-                echo "[paru-wrapper] Automatically updating MKVPKG repository database..." >&2
-                repo-add -R -w /mnt/v/Data/makepkg/packages/MKVPKG.db.tar.gz "${new_pkgs[@]}"
-                echo "[paru-wrapper] MKVPKG repository database updated successfully." >&2
+                echo "[paru-wrapper] Automatically updating $PARU_WRAPPER_REPO repository database..." >&2
+                repo-add -R -w "$PARU_WRAPPER_REPO_DB" "${new_pkgs[@]}"
+                echo "[paru-wrapper] $PARU_WRAPPER_REPO repository database updated successfully." >&2
             fi
             rm -f "$start_marker"
         fi
@@ -91,11 +187,14 @@ if [ "$is_transaction" = true ]; then
         export PRE_SNAP_ID
     fi
 
-    # Prune outdated unmodified packages from MKVPKG using helper script to trigger upgrades from AUR
-    if [ -x "/usr/bin/update_mkvpkg_aur.py" ]; then
-        /usr/bin/update_mkvpkg_aur.py
-    elif [ -f "$(dirname "$0")/update_mkvpkg_aur.py" ]; then
-        python3 "$(dirname "$0")/update_mkvpkg_aur.py"
+    # Prune outdated unmodified packages from custom repo using helper script to trigger upgrades from AUR
+    if [ -n "$PARU_WRAPPER_REPO" ]; then
+        export PARU_WRAPPER_REPO PARU_WRAPPER_REPO_DB PARU_WRAPPER_PROJECTS_DIR
+        if [ -x "/usr/bin/update_mkvpkg_aur.py" ]; then
+            /usr/bin/update_mkvpkg_aur.py
+        elif [ -f "$(dirname "$0")/update_mkvpkg_aur.py" ]; then
+            python3 "$(dirname "$0")/update_mkvpkg_aur.py"
+        fi
     fi
 
     # Extract target packages and other arguments
@@ -114,7 +213,7 @@ if [ "$is_transaction" = true ]; then
         local pkg="$1"
         local repo
         repo=$(pacman -Si "$pkg" 2>/dev/null | grep -i '^Repository' | awk '{print $3}')
-        if [[ -n "$repo" ]] && [[ "$repo" != "MKVPKG" ]]; then
+        if [[ -n "$repo" ]] && [[ "$repo" != "$PARU_WRAPPER_REPO" ]]; then
             return 0
         fi
         return 1
@@ -125,9 +224,9 @@ if [ "$is_transaction" = true ]; then
     for pkg in "${targets[@]}"; do
         if is_official_pkg "$pkg"; then
             filtered_targets+=("$pkg")
-        elif [ -d "/home/v/Projects/$pkg" ] && [ -f "/home/v/Projects/$pkg/PKGBUILD" ]; then
+        elif [ -n "$PARU_WRAPPER_REPO" ] && [ -d "$PARU_WRAPPER_PROJECTS_DIR/$pkg" ] && [ -f "$PARU_WRAPPER_PROJECTS_DIR/$pkg/PKGBUILD" ]; then
             echo "[paru-wrapper] Rebuilding local package '$pkg' from source..." >&2
-            if (cd "/home/v/Projects/$pkg" && makepkg -sfi --noconfirm); then
+            if (cd "$PARU_WRAPPER_PROJECTS_DIR/$pkg" && makepkg -sfi --noconfirm); then
                 if command -v anneal >/dev/null; then
                     echo "[paru-wrapper] Unmarking '$pkg' in anneal rebuild queue..." >&2
                     sudo anneal unmark "$pkg" 2>/dev/null || true
