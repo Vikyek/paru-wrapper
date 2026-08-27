@@ -12,9 +12,9 @@ source=(
     "update_mkvpkg_aur.py"
     "pacman-wrapper"
 )
-sha256sums=('dcf01f73de094f9fc3a69263b3b39520db531606e5cf4ec2b096e89783271c16'
+sha256sums=('7a90b770d9af1ee53d20c2e76c0791ce19d4ab7bb9882af9aa0c0f0a95883950'
             'c234fbb4457e50d32f2ee16db5482d35fd506e644edd7a8f2a8b3869e38735aa'
-            '7ddb593fb7ac474f1a613ff74857a8ff7c7670a83d520d668eaaca1497d8b5e8')
+            '196ce091d2189a17eb674da84f0b3e5f12fd50d5777547417b6267a8ee2c4f7b')
 
 package() {
     # Install paru wrapper
