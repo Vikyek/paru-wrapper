@@ -353,9 +353,11 @@ if [ "$is_transaction" = true ]; then
         fi
 
         # 4. Filter out any orphans that are in new_deps
+        # Pad with newlines to ensure exact matching using pure bash, avoiding O(N) subprocess forks
+        new_deps_padded=$'\n'"$new_deps"$'\n'
         orphans_to_remove=()
         for orphan in $orphans; do
-            if echo "$new_deps" | grep -Fqx "$orphan"; then
+            if [[ "$new_deps_padded" == *$'\n'"$orphan"$'\n'* ]]; then
                 echo "[paru-wrapper] Preserving orphan package '$orphan' (will be needed by incoming updates)." >&2
             else
                 orphans_to_remove+=("$orphan")

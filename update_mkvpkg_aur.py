@@ -16,20 +16,23 @@ def run_cmd(cmd):
     except Exception:
         return ""
 
-def get_mkvpkg_packages():
+def get_mkvpkg_packages_and_versions():
+    """
+    Returns a dictionary of {pkg_name: version} for all packages in the repo.
+    Uses 'pacman -Sl <repo>' to get all packages and versions in a single subprocess call,
+    avoiding the N+1 query problem of calling 'pacman -Si' for every package.
+    """
     if not repo_name:
-        return []
-    output = run_cmd(["pacman", "-Slq", repo_name])
-    return output.splitlines() if output else []
-
-def get_local_ver(pkg):
-    if not repo_name:
-        return None
-    output = run_cmd(["pacman", "-Si", f"{repo_name}/{pkg}"])
-    for line in output.splitlines():
-        if line.startswith("Version"):
-            return line.split(":")[1].strip()
-    return None
+        return {}
+    output = run_cmd(["pacman", "-Sl", repo_name])
+    packages = {}
+    if output:
+        for line in output.splitlines():
+            parts = line.split()
+            if len(parts) >= 3:
+                # parts[0] is repo, parts[1] is name, parts[2] is version
+                packages[parts[1]] = parts[2]
+    return packages
 
 def query_aur(packages):
     results = {}
@@ -53,14 +56,14 @@ def main():
     if not os.path.exists(db_path):
         return
 
-    pkgs = get_mkvpkg_packages()
+    # Use single pacman call to get all packages and versions
+    pkg_versions = get_mkvpkg_packages_and_versions()
     unmodified_pkgs = []
     local_versions = {}
 
-    for pkg in pkgs:
+    for pkg, ver in pkg_versions.items():
         proj_path = os.path.join(projects_dir, pkg)
         if not os.path.isdir(proj_path):
-            ver = get_local_ver(pkg)
             if ver:
                 unmodified_pkgs.append(pkg)
                 local_versions[pkg] = ver
