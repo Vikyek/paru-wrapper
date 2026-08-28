@@ -27,9 +27,25 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
     if [ "$is_install" = true ]; then
         total=$(cat "$CACHE_DIR/paru_total_packages" 2>/dev/null || echo "0")
         completed=$(cat "$CACHE_DIR/paru_completed_packages" 2>/dev/null || echo "0")
+
+        # Sanitize variables to prevent bash arithmetic command injection
+        total="${total//[^0-9]/}"
+        completed="${completed//[^0-9]/}"
+        total="${total:-0}"
+        completed="${completed:-0}"
+
         if [ "$total" -gt 0 ]; then
             completed=$((completed + 1))
-            echo "$completed" > "$CACHE_DIR/paru_completed_packages"
+
+            # Prevent symlink attacks by dropping privileges when writing to user cache dir
+            if [ -n "$SUDO_USER" ] && command -v sudo >/dev/null; then
+                sudo -u "$SUDO_USER" bash -c "echo '$completed' > '$CACHE_DIR/paru_completed_packages'" 2>/dev/null || true
+            else
+                if [ ! -L "$CACHE_DIR/paru_completed_packages" ]; then
+                    echo "$completed" > "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
+                fi
+            fi
+
             percent=$((completed * 100 / total))
             echo -e "\n\e[1;32m[paru-wrapper] Progress: $completed / $total packages completed ($percent%)\e[0m\n" >&2
         fi
