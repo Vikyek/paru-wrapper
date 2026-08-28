@@ -6,3 +6,6 @@
 **Action:** Use pure bash substring matching (e.g. `[[ "$new_deps_padded" == *$'
 '"$orphan"$'
 '* ]]`) to process lists efficiently without leaving the shell.
+## 2024-05-14 - Optimize update_mkvpkg_aur.py subprocess spawns
+**Learning:** Subprocess creation in Python scripts is a significant bottleneck when called repetitively in a loop (e.g., `vercmp` on matching string versions or `repo-remove` for individual packages).
+**Action:** When working with Python wrapper scripts for system tools, always check for early return opportunities to avoid spawning subprocesses, and batch arguments into single subprocess calls whenever possible.
