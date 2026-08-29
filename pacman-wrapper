@@ -27,6 +27,13 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
     if [ "$is_install" = true ]; then
         total=$(cat "$CACHE_DIR/paru_total_packages" 2>/dev/null || echo "0")
         completed=$(cat "$CACHE_DIR/paru_completed_packages" 2>/dev/null || echo "0")
+
+        # Sanitize variables to prevent command injection in arithmetic evaluation
+        total="${total//[^0-9]/}"
+        completed="${completed//[^0-9]/}"
+        total="${total:-0}"
+        completed="${completed:-0}"
+
         if [ "$total" -gt 0 ]; then
             completed=$((completed + 1))
             echo "$completed" > "$CACHE_DIR/paru_completed_packages"
