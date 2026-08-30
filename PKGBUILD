@@ -13,8 +13,8 @@ source=(
     "pacman-wrapper"
 )
 sha256sums=('7a90b770d9af1ee53d20c2e76c0791ce19d4ab7bb9882af9aa0c0f0a95883950'
-            'c234fbb4457e50d32f2ee16db5482d35fd506e644edd7a8f2a8b3869e38735aa'
-            '196ce091d2189a17eb674da84f0b3e5f12fd50d5777547417b6267a8ee2c4f7b')
+            '3dba8118b598ad2be090bd45e954eb81f1c00665de524cb3366da0ff6c34b75f'
+            'a2a3704ed1b72b9cb5a07fca38562e945eee9c1a4290fab5c2202a77bddcba8d')
 
 package() {
     # Install paru wrapper
