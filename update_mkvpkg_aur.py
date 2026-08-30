@@ -2,7 +2,6 @@
 import subprocess
 import os
 import urllib.request
-import urllib.parse
 import json
 
 db_path = os.environ.get("PARU_WRAPPER_REPO_DB", "")
@@ -14,7 +13,7 @@ def run_cmd(cmd):
         return subprocess.check_output(cmd, text=True).strip()
     except subprocess.CalledProcessError:
         return ""
-    except OSError:
+    except Exception:
         return ""
 
 def get_mkvpkg_packages_and_versions():
@@ -39,7 +38,7 @@ def query_aur(packages):
     results = {}
     for i in range(0, len(packages), 50):
         batch = packages[i:i+50]
-        params = "&".join(f"arg[]={urllib.parse.quote(pkg)}" for pkg in batch)
+        params = "&".join(f"arg[]={pkg}" for pkg in batch)
         url = f"https://aur.archlinux.org/rpc/?v=5&type=info&{params}"
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'paru-wrapper-updater'})
@@ -74,27 +73,19 @@ def main():
 
     aur_versions = query_aur(unmodified_pkgs)
     db_changed = False
-    pkgs_to_remove = []
 
     for pkg in unmodified_pkgs:
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
-            # ⚡ Bolt Optimization: Early return to avoid spawning `vercmp` subprocess when versions match exactly
-            if aur_ver == local_ver:
-                continue
             try:
                 res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip())
                 if res > 0:
                     print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from {repo_name} to trigger upgrade...")
-                    pkgs_to_remove.append(pkg)
-            except (subprocess.CalledProcessError, ValueError, OSError) as e:
+                    subprocess.run(["repo-remove", "-w", db_path, pkg], check=True)
+                    db_changed = True
+            except Exception as e:
                 print(f"Error comparing version for {pkg}: {e}")
-
-    # ⚡ Bolt Optimization: Batch all package removals into a single `repo-remove` subprocess call
-    if pkgs_to_remove:
-        subprocess.run(["repo-remove", "-w", db_path, *pkgs_to_remove], check=True) # nosec
-        db_changed = True
 
     if db_changed:
         subprocess.run(["sudo", "pacman", "-Sy"], check=True)
