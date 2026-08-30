@@ -28,10 +28,8 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         self.assertEqual(result, "")
 
     @patch('update_mkvpkg_aur.run_cmd')
+    @patch('update_mkvpkg_aur.repo_name', 'myrepo')
     def test_get_mkvpkg_packages_and_versions(self, mock_run_cmd):
-        # Set repo_name to a known value
-        original_repo = update_mkvpkg_aur.repo_name
-        update_mkvpkg_aur.repo_name = "myrepo"
         mock_run_cmd.return_value = "myrepo pkg1 1.0.0\nmyrepo pkg2 2.0.0\nbadline\n"
 
         expected = {"pkg1": "1.0.0", "pkg2": "2.0.0"}
@@ -39,19 +37,12 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         self.assertEqual(result, expected)
         mock_run_cmd.assert_called_once_with(["pacman", "-Sl", "myrepo"])
 
-        # Restore original value
-        update_mkvpkg_aur.repo_name = original_repo
-
     @patch('update_mkvpkg_aur.run_cmd')
+    @patch('update_mkvpkg_aur.repo_name', '')
     def test_get_mkvpkg_packages_and_versions_no_repo(self, mock_run_cmd):
-        original_repo = update_mkvpkg_aur.repo_name
-        update_mkvpkg_aur.repo_name = ""
         result = update_mkvpkg_aur.get_mkvpkg_packages_and_versions()
         self.assertEqual(result, {})
         mock_run_cmd.assert_not_called()
-
-        # Restore original value
-        update_mkvpkg_aur.repo_name = original_repo
 
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
     def test_query_aur_success(self, mock_urlopen):
