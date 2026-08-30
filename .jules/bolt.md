@@ -6,7 +6,3 @@
 **Action:** Use pure bash substring matching (e.g. `[[ "$new_deps_padded" == *$'
 '"$orphan"$'
 '* ]]`) to process lists efficiently without leaving the shell.
-
-## 2024-05-30 - Python Subprocess Optimization
-**Learning:** To prevent performance bottlenecks when executing system calls in Python scripts, early return checks (like string equality for versions) and batching subprocess arguments minimize spawning overhead.
-**Action:** Apply early returns and batch arguments for external commands to minimize expensive subprocess calls.
