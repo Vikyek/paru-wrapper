@@ -1,7 +1,7 @@
 pkgbase = paru-wrapper
 	pkgdesc = A wrapper around paru that implements dependency-aware orphan cleaning and automatic local repository DB updates
 	pkgver = 1.0.0
-	pkgrel = 5
+	pkgrel = 6
 	url = https://github.com/Vikyek/paru-wrapper
 	install = paru-wrapper.install
 	arch = any
@@ -12,7 +12,8 @@ pkgbase = paru-wrapper
 	source = paru-wrapper
 	source = update_mkvpkg_aur.py
 	source = pacman-wrapper
-	sha256sums = SKIP
-	sha256sums = SKIP
+	sha256sums = 1192c3b8f4196b0ae5074a84d5b93a0fe93ed6bddf4e38e90929a55ece457967
+	sha256sums = 4e0f24eebe0dfbe7bea64dd54c04a92809ba2c539923af85bb4a600bbd55479a
+	sha256sums = 2769d1bf7772a7cc3a95df62c79543c0bfb44d48db901f0a4c169aae23d68f6a
 
 pkgname = paru-wrapper

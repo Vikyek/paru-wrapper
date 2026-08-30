@@ -458,6 +458,16 @@ if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ] && [ "${hooks_dis
             sudo /usr/bin/rebuild-check || true
         fi
     fi
+# Optional agy-syncvault integration
+if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ]; then
+    # Resolve SUDO_USER or USER home directory safely
+    INVOKING_USER="${SUDO_USER:-$USER}"
+    RUN_USER_HOME=$(getent passwd "$INVOKING_USER" | cut -d: -f6)
+    VAULT_SYNC_SCRIPT="${RUN_USER_HOME}/.gemini/config/scripts/auto_sync_vault.py"
+    if [ -f "$VAULT_SYNC_SCRIPT" ]; then
+        echo "[paru-wrapper] Triggering agy-syncvault background sync..." >&2
+        runuser -u "$INVOKING_USER" -- python3 "$VAULT_SYNC_SCRIPT" >/dev/null 2>&1 &
+    fi
 fi
 
 exit ${exit_code:-0}

@@ -7,6 +7,7 @@ A wrapper around `paru` that automates dependency-aware orphaned package cleanin
 - **Automatic Repository DB Registration:** Detects packages compiled during `paru` upgrades and registers them directly in the custom repository database.
 - **Orphan Preservation & Cleaning:** Before upgrades, automatically checks for orphaned packages. It preserves orphans that will be needed as dependencies of packages being upgraded, and cleans the remainder.
 - **System Integration:** Installs a wrapper binary to `/usr/bin/paru-wrapper` and overrides normal `paru` invocations for the local user by placing a symlink at `~/.local/bin/paru`.
+- **agy-syncvault Integration:** Triggers the private configuration vault background sync script (`auto_sync_vault.py`) automatically after a successful transaction.
 
 ## Installation
 
