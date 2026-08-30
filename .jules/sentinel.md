@@ -6,4 +6,4 @@
 ## 2024-08-30 - Bash Arithmetic Command Injection
 **Vulnerability:** Command injection in `pacman-wrapper` through arithmetic evaluation (`$((completed + 1))`). The `completed` and `total` variables were read directly from cache files without sanitization. An attacker could craft a payload in these files that executes arbitrary commands.
 **Learning:** Using `$((...))` with unvalidated variables allows attackers to inject commands or references that Bash evaluates directly. Always sanitize untrusted variables before using them in arithmetic evaluation, especially when data is read from potentially writable files.
-**Prevention:** Sanitize the variables by stripping non-numeric characters (e.g., `var="${var//[^0-9]/}"`) before performing any arithmetic evaluation to ensure they only contain digits. Also provide a fallback value in case they become empty.
+**Prevention:** Sanitize the variables by stripping non-numeric characters (e.g., `var="${var//[^0-9]/}"`) and parse the sanitized values explicitly as decimal (e.g., with `10#$var`) before performing any arithmetic evaluation. Also provide a fallback value in case they become empty.
