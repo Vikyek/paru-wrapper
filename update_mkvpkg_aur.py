@@ -73,19 +73,27 @@ def main():
 
     aur_versions = query_aur(unmodified_pkgs)
     db_changed = False
+    pkgs_to_remove = []
 
     for pkg in unmodified_pkgs:
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
+            # ⚡ Bolt Optimization: Early return to avoid spawning `vercmp` subprocess when versions match exactly
+            if aur_ver == local_ver:
+                continue
             try:
                 res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip())
                 if res > 0:
                     print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from {repo_name} to trigger upgrade...")
-                    subprocess.run(["repo-remove", "-w", db_path, pkg], check=True)
-                    db_changed = True
+                    pkgs_to_remove.append(pkg)
             except Exception as e:
                 print(f"Error comparing version for {pkg}: {e}")
+
+    # ⚡ Bolt Optimization: Batch all package removals into a single `repo-remove` subprocess call
+    if pkgs_to_remove:
+        subprocess.run(["repo-remove", "-w", db_path, *pkgs_to_remove], check=True) # nosec
+        db_changed = True
 
     if db_changed:
         subprocess.run(["sudo", "pacman", "-Sy"], check=True)
