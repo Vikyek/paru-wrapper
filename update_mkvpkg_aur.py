@@ -119,10 +119,6 @@ def main():
             except Exception as e:
                 print(f"Error batch removing packages: {e}")
 
-    # Optimization: Batch repo-remove operations to reduce subprocess overhead
-    if pkgs_to_remove:
-        subprocess.run(["repo-remove", "-w", db_path] + pkgs_to_remove, check=True)
-        db_changed = True
 
     if "db_changed" in locals() and db_changed:
         subprocess.run(["sudo", "pacman", "-Sy"], check=True)
