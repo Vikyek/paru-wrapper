@@ -43,6 +43,14 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
             echo "$completed" > "$CACHE_DIR/paru_completed_packages"
             percent=$((completed * 100 / total))
 
+            bar_len=20
+            filled=$((percent * bar_len / 100))
+            bar=""
+            if [ "$filled" -gt 0 ]; then
+                bar=$(printf "%${filled}s" | tr ' ' '#')
+            fi
+            bar=$(printf "%-${bar_len}s" "$bar" | tr ' ' '-')
+
             if [ -z "${NO_COLOR:-}" ]; then
                 c_green='\e[1;32m'
                 c_reset='\e[0m'
