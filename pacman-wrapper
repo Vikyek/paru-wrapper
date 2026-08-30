@@ -27,6 +27,13 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
     if [ "$is_install" = true ]; then
         total=$(cat "$CACHE_DIR/paru_total_packages" 2>/dev/null || echo "0")
         completed=$(cat "$CACHE_DIR/paru_completed_packages" 2>/dev/null || echo "0")
+
+        # Sanitize variables to prevent command injection in arithmetic evaluation
+        total="${total//[^0-9]/}"
+        total="${total:-0}"
+        completed="${completed//[^0-9]/}"
+        completed="${completed:-0}"
+
         if [ "$total" -gt 0 ]; then
             completed=$((completed + 1))
             echo "$completed" > "$CACHE_DIR/paru_completed_packages"
@@ -40,12 +47,16 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
                 c_reset=''
             fi
 
-            filled=$(( percent / 5 ))
-            empty=$(( 20 - filled ))
-            bar_filled=$(printf "%${filled}s" "" | tr ' ' '#')
-            bar_empty=$(printf "%${empty}s" "" | tr ' ' '-')
+            bar_len=20
+            filled=$((percent * bar_len / 100))
+            empty=$((bar_len - filled))
 
-            echo -e "${c_green}[paru-wrapper] Progress: [${bar_filled}${bar_empty}] $completed / $total packages completed ($percent%)${c_reset}" >&2
+            filled_str="##################################################"
+            empty_str="--------------------------------------------------"
+            bar="${filled_str:0:filled}"
+            bar_empty="${empty_str:0:empty}"
+
+            echo -e "${c_green}[paru-wrapper] Progress: [${bar}${bar_empty}] $completed / $total packages completed ($percent%)${c_reset}" >&2
         fi
     fi
 fi
