@@ -6,11 +6,6 @@
 **Action:** Use pure bash substring matching (e.g. `[[ "$new_deps_padded" == *$'
 '"$orphan"$'
 '* ]]`) to process lists efficiently without leaving the shell.
-
-## 2024-05-14 - Optimize update_mkvpkg_aur.py subprocess spawns
-**Learning:** Subprocess creation in Python scripts is a significant bottleneck when called repetitively in a loop (e.g., `vercmp` on matching string versions or `repo-remove` for individual packages).
-**Action:** When working with Python wrapper scripts for system tools, always check for early return opportunities to avoid spawning subprocesses, and batch arguments into single subprocess calls whenever possible.
-
-## 2024-05-30 - Python Subprocess Optimization
-**Learning:** To prevent performance bottlenecks when executing system calls in Python scripts, early return checks (like string equality for versions) and batching subprocess arguments minimize spawning overhead.
-**Action:** Apply early returns and batch arguments for external commands to minimize expensive subprocess calls.
+## 2026-08-30 - Fix repo-remove security validation and merge conflict
+**Learning:** When adding `--` to separate arguments from flags in bash commands executed via `subprocess.run`, ensure the `--` is placed *after* all the necessary command options (e.g. `["repo-remove", "-w", "--", db_path]...` would treat `db_path` as a package name, whereas `["repo-remove", "-w", db_path, "--"]...` correctly limits parsing only for the package names. However `pacman` tooling stops parsing options at the first non-option argument, so `db_path` itself is enough to stop option parsing. If `--` is still required by linters, place it correctly before the untrusted arguments and after any positional arguments that require escaping.
+**Action:** Always test the position of `--` when using tools like `repo-remove` or `repo-add` in a subprocess, and ensure the script integrates correctly with `locals()` checks from upstream commits to avoid breaking the build during a merge.
