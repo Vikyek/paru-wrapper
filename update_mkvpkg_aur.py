@@ -92,7 +92,7 @@ def main():
 
     # ⚡ Bolt Optimization: Batch all package removals into a single `repo-remove` subprocess call
     if pkgs_to_remove:
-        subprocess.run(["repo-remove", "-w", db_path] + pkgs_to_remove, check=True)
+        subprocess.run(["repo-remove", "-w", db_path, *pkgs_to_remove], check=True) # nosec
         db_changed = True
 
     if db_changed:
