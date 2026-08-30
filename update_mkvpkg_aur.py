@@ -118,9 +118,7 @@ def main():
             except Exception as e:
                 print(f"Error batch removing packages: {e}")
 
-    if pkgs_to_remove:
-        # ⚡ Bolt: Batch subprocess arguments to minimize spawning overhead
-        subprocess.run(["repo-remove", "-w", db_path] + pkgs_to_remove, check=True)
+    if "db_changed" in locals() and db_changed:
         subprocess.run(["sudo", "pacman", "-Sy"], check=True)
 
 if __name__ == "__main__":
