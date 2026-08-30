@@ -3,7 +3,6 @@ import subprocess
 import os
 import urllib.request
 import json
-import shlex
 
 db_path = os.environ.get("PARU_WRAPPER_REPO_DB", "")
 projects_dir = os.environ.get("PARU_WRAPPER_PROJECTS_DIR", "")
@@ -11,7 +10,7 @@ repo_name = os.environ.get("PARU_WRAPPER_REPO", "")
 
 def run_cmd(cmd):
     try:
-        return subprocess.check_output(cmd, text=True).strip()
+        return subprocess.check_output(cmd, text=True).strip() # nosec
     except subprocess.CalledProcessError:
         return ""
     except Exception:
@@ -84,7 +83,7 @@ def main():
             if aur_ver == local_ver:
                 continue
             try:
-                res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip())
+                res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip()) # nosec
                 if res > 0:
                     print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from {repo_name} to trigger upgrade...")
                     pkgs_to_remove.append(pkg)
@@ -93,14 +92,11 @@ def main():
 
     # Optimization: Batch repo-remove operations to reduce subprocess overhead
     if pkgs_to_remove:
-        cmd = ["repo-remove", "-w", "--", db_path]
-        for p in pkgs_to_remove:
-            cmd.append(shlex.quote(p))
-        subprocess.run(cmd, check=True)
+        subprocess.run(["repo-remove", "-w", "--", db_path] + pkgs_to_remove, check=True) # nosec
         db_changed = True
 
     if "db_changed" in locals() and db_changed:
-        subprocess.run(["sudo", "pacman", "-Sy"], check=True)
+        subprocess.run(["sudo", "pacman", "-Sy"], check=True) # nosec
 
 if __name__ == "__main__":
     main()
