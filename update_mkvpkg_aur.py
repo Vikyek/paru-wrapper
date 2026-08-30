@@ -13,7 +13,7 @@ def run_cmd(cmd):
         return subprocess.check_output(cmd, text=True).strip()
     except subprocess.CalledProcessError:
         return ""
-    except Exception:
+    except OSError:
         return ""
 
 def get_mkvpkg_packages_and_versions():
