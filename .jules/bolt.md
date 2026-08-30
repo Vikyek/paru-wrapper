@@ -6,3 +6,6 @@
 **Action:** Use pure bash substring matching (e.g. `[[ "$new_deps_padded" == *$'
 '"$orphan"$'
 '* ]]`) to process lists efficiently without leaving the shell.
+## 2026-08-29 - Subprocess Overhead Optimization in update_mkvpkg_aur.py
+**Learning:** For-loops running subprocess calls (like `vercmp` and `repo-remove`) for every package create massive overhead (N+1 query problem) in Python scripts.
+**Action:** Always look for opportunities to early return/skip unnecessary subprocess calls (e.g. `aur_ver == local_ver`), and batch commands that accept multiple arguments (like `repo-remove`) into a single subprocess call.
