@@ -28,35 +28,22 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
         total=$(cat "$CACHE_DIR/paru_total_packages" 2>/dev/null || echo "0")
         completed=$(cat "$CACHE_DIR/paru_completed_packages" 2>/dev/null || echo "0")
 
-        # Sanitize variables to prevent command injection in arithmetic evaluation
-        total="${total//[^0-9]/}"
-        total="${total:-0}"
-        completed="${completed//[^0-9]/}"
-        completed="${completed:-0}"
+        # Strictly validate variables to prevent bash arithmetic command injection
+        if [[ ! "$total" =~ ^[0-9]+$ ]]; then total=0; fi
+        if [[ ! "$completed" =~ ^[0-9]+$ ]]; then completed=0; fi
 
         if [ "$total" -gt 0 ]; then
             completed=$((completed + 1))
-            echo "$completed" > "$CACHE_DIR/paru_completed_packages"
-            percent=$((completed * 100 / total))
 
-            if [ -z "${NO_COLOR:-}" ]; then
-                c_green='\e[1;32m'
-                c_reset='\e[0m'
-            else
-                c_green=''
-                c_reset=''
+            # Secure atomic write to prevent TOCTOU symlink overwrite attacks
+            tmp_file=$(mktemp "$CACHE_DIR/paru_completed_packages.XXXXXX" 2>/dev/null || true)
+            if [ -n "$tmp_file" ]; then
+                echo "$completed" > "$tmp_file"
+                mv -fT "$tmp_file" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
             fi
 
-            bar_len=20
-            filled=$((percent * bar_len / 100))
-            empty=$((bar_len - filled))
-
-            filled_str="##################################################"
-            empty_str="--------------------------------------------------"
-            bar="${filled_str:0:filled}"
-            bar_empty="${empty_str:0:empty}"
-
-            echo -e "\n${c_green}[paru-wrapper] Progress: [${bar}${bar_empty}] $completed / $total packages (${percent}%)${c_reset}\n" >&2
+            percent=$((completed * 100 / total))
+            echo -e "\n\e[1;32m[paru-wrapper] Progress: $completed / $total packages completed ($percent%)\e[0m\n" >&2
         fi
     fi
 fi
