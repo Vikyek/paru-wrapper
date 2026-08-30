@@ -3,6 +3,7 @@ import subprocess
 import os
 import urllib.request
 import json
+import shlex
 
 db_path = os.environ.get("PARU_WRAPPER_REPO_DB", "")
 projects_dir = os.environ.get("PARU_WRAPPER_PROJECTS_DIR", "")
@@ -92,7 +93,10 @@ def main():
 
     # Optimization: Batch repo-remove operations to reduce subprocess overhead
     if pkgs_to_remove:
-        subprocess.run(["repo-remove", "-w", "--", db_path] + pkgs_to_remove, check=True)
+        cmd = ["repo-remove", "-w", "--", db_path]
+        for p in pkgs_to_remove:
+            cmd.append(shlex.quote(p))
+        subprocess.run(cmd, check=True)
         db_changed = True
 
     if "db_changed" in locals() and db_changed:
