@@ -101,7 +101,7 @@ def main():
         for i in range(0, len(to_compare), 150):
             batch = to_compare[i:i+150]
             try:
-                out = subprocess.check_output(["bash", "-c", script, "sh"] + batch, text=True)
+                out = subprocess.check_output(["bash", "-c", script, "--"] + batch, text=True)
                 if out.strip():
                     newer_pkgs.extend(out.strip().splitlines())
             except Exception as e:
@@ -113,7 +113,7 @@ def main():
 
             try:
                 # Batch remove
-                subprocess.run(["repo-remove", "-w", db_path] + newer_pkgs, check=True)
+                subprocess.run(["repo-remove", "-w", db_path, "--"] + newer_pkgs, check=True)
                 db_changed = True
             except Exception as e:
                 print(f"Error batch removing packages: {e}")
