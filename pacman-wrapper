@@ -3,7 +3,7 @@
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/paru-wrapper"
 if [ -n "$SUDO_USER" ]; then
     # When running under sudo (e.g. as root), use the calling user's cache dir
-    USER_HOME=$(eval echo "~$SUDO_USER")
+    USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
     CACHE_DIR="$USER_HOME/.cache/paru-wrapper"
 fi
 
@@ -20,9 +20,21 @@ if [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$CACHE_DIR/paru_completed_pa
     if [ "$is_install" = true ]; then
         total=$(cat "$CACHE_DIR/paru_total_packages" 2>/dev/null || echo "0")
         completed=$(cat "$CACHE_DIR/paru_completed_packages" 2>/dev/null || echo "0")
+
+        # Sanitize values to prevent arithmetic command injection
+        total="${total//[^0-9]/}"
+        total="${total:-0}"
+        completed="${completed//[^0-9]/}"
+        completed="${completed:-0}"
+
         if [ "$total" -gt 0 ]; then
             completed=$((completed + 1))
-            echo "$completed" > "$CACHE_DIR/paru_completed_packages"
+
+            # Write securely to avoid TOCTOU symlink vulnerabilities
+            tmp_comp=$(mktemp "$CACHE_DIR/paru_completed_packages.XXXXXX")
+            echo "$completed" > "$tmp_comp"
+            mv -f "$tmp_comp" "$CACHE_DIR/paru_completed_packages"
+
             percent=$((completed * 100 / total))
             echo -e "\n\e[1;32m[paru-wrapper] Progress: $completed / $total packages completed ($percent%)\e[0m\n" >&2
         fi
