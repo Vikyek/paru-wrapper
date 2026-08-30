@@ -17,23 +17,20 @@ fi
 if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$CACHE_DIR/paru_completed_packages" ]; then
     # We only increment progress for install or upgrade commands
     is_install=false
-    for arg in "$@"; do
-        if [[ "$arg" =~ ^-U[a-zA-Z]*$ ]] || [[ "$arg" =~ ^-S[a-zA-Z]*$ ]]; then
+    check_args() {
+        if [ $# -eq 0 ]; then return; fi
+        if [[ "$1" =~ ^-U[a-zA-Z]*$ ]] || [[ "$1" =~ ^-S[a-zA-Z]*$ ]]; then
             is_install=true
-            break
+            return
         fi
-    done
+        shift
+        check_args "$@"
+    }
+    check_args "$@"
 
     if [ "$is_install" = true ]; then
         total=$(cat "$CACHE_DIR/paru_total_packages" 2>/dev/null || echo "0")
         completed=$(cat "$CACHE_DIR/paru_completed_packages" 2>/dev/null || echo "0")
-
-        # Sanitize variables to prevent command injection in arithmetic evaluation
-        total="${total//[^0-9]/}"
-        total="${total:-0}"
-        completed="${completed//[^0-9]/}"
-        completed="${completed:-0}"
-
         if [ "$total" -gt 0 ]; then
             completed=$((completed + 1))
             echo "$completed" > "$CACHE_DIR/paru_completed_packages"
@@ -56,7 +53,7 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
             bar="${filled_str:0:filled}"
             bar_empty="${empty_str:0:empty}"
 
-            echo -e "\n${c_green}[paru-wrapper] Progress: [${bar}${bar_empty}] $completed / $total packages (${percent}%)${c_reset}\n" >&2
+            echo -e "\n${c_green}[paru-wrapper] Progress: [${bar}${bar_empty}] $completed / $total packages completed (${percent}%)${c_reset}\n" >&2
         fi
     fi
 fi
