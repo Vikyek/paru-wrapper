@@ -3,3 +3,4 @@ src/
 paru-wrapper-*.pkg.tar.zst
 paru-wrapper-*.log
 venv/
+__pycache__/
