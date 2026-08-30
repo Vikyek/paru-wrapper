@@ -87,7 +87,7 @@ def main():
                 if res > 0:
                     print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from {repo_name} to trigger upgrade...")
                     pkgs_to_remove.append(pkg)
-            except (subprocess.CalledProcessError, ValueError) as e:
+            except (subprocess.CalledProcessError, ValueError, OSError) as e:
                 print(f"Error comparing version for {pkg}: {e}")
 
     # ⚡ Bolt Optimization: Batch all package removals into a single `repo-remove` subprocess call
