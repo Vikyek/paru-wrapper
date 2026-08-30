@@ -27,9 +27,21 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
     if [ "$is_install" = true ]; then
         total=$(cat "$CACHE_DIR/paru_total_packages" 2>/dev/null || echo "0")
         completed=$(cat "$CACHE_DIR/paru_completed_packages" 2>/dev/null || echo "0")
+
+        # Strictly validate variables to prevent bash arithmetic command injection
+        if [[ ! "$total" =~ ^[0-9]+$ ]]; then total=0; fi
+        if [[ ! "$completed" =~ ^[0-9]+$ ]]; then completed=0; fi
+
         if [ "$total" -gt 0 ]; then
             completed=$((completed + 1))
-            echo "$completed" > "$CACHE_DIR/paru_completed_packages"
+
+            # Secure atomic write to prevent TOCTOU symlink overwrite attacks
+            tmp_file=$(mktemp "$CACHE_DIR/paru_completed_packages.XXXXXX" 2>/dev/null || true)
+            if [ -n "$tmp_file" ]; then
+                echo "$completed" > "$tmp_file"
+                mv -fT "$tmp_file" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
+            fi
+
             percent=$((completed * 100 / total))
             echo -e "\n\e[1;32m[paru-wrapper] Progress: $completed / $total packages completed ($percent%)\e[0m\n" >&2
         fi
