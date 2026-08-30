@@ -72,7 +72,7 @@ def main():
         return
 
     aur_versions = query_aur(unmodified_pkgs)
-    db_changed = False
+    pkgs_to_remove = []
 
     to_compare = []
     for pkg in unmodified_pkgs:
@@ -118,7 +118,7 @@ def main():
             except Exception as e:
                 print(f"Error batch removing packages: {e}")
 
-    if db_changed:
+    if "db_changed" in locals() and db_changed:
         subprocess.run(["sudo", "pacman", "-Sy"], check=True)
 
 if __name__ == "__main__":
