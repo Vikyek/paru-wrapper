@@ -378,9 +378,9 @@ if [ "$is_transaction" = true ]; then
                 echo "  -> $pkg" >&2
             done
             if [ "$DRY_RUN" = true ]; then
-                echo "[paru-wrapper] DRY RUN: would run: sudo pacman -Rns --noconfirm ${orphans_to_remove[*]}" >&2
+                echo "[paru-wrapper] DRY RUN: would run: sudo pacman -Rns --noconfirm -- ${orphans_to_remove[*]}" >&2
             else
-                sudo pacman -Rns --noconfirm "${orphans_to_remove[@]}"
+                sudo pacman -Rns --noconfirm -- "${orphans_to_remove[@]}"
             fi
         fi
     fi
