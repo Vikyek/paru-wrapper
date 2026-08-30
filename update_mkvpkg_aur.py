@@ -74,20 +74,49 @@ def main():
     aur_versions = query_aur(unmodified_pkgs)
     pkgs_to_remove = []
 
+    to_compare = []
     for pkg in unmodified_pkgs:
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
-            # ⚡ Bolt: Early string equality check to avoid expensive subprocess calls
             if aur_ver == local_ver:
                 continue
+            to_compare.extend([pkg, aur_ver, local_ver])
+
+    if to_compare:
+        script = """
+        while [ $# -ge 3 ]; do
+            pkg="$1"
+            aur="$2"
+            loc="$3"
+            res=$(vercmp "$aur" "$loc" 2>/dev/null || echo 0)
+            if [ "$res" -gt 0 ]; then
+                echo "$pkg"
+            fi
+            shift 3
+        done
+        """
+        newer_pkgs = []
+        # Batch max 150 args (50 packages) at a time
+        for i in range(0, len(to_compare), 150):
+            batch = to_compare[i:i+150]
             try:
-                res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip())
-                if res > 0:
-                    print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from {repo_name} to trigger upgrade...")
-                    pkgs_to_remove.append(pkg)
+                out = subprocess.check_output(["bash", "-c", script, "--", *batch], text=True)  # nosec B603
+                if out.strip():
+                    newer_pkgs.extend(out.strip().splitlines())
             except Exception as e:
-                print(f"Error comparing version for {pkg}: {e}")
+                print(f"Error in batch version comparison: {e}")
+
+        if newer_pkgs:
+            for pkg in newer_pkgs:
+                print(f"[paru-wrapper] Newer version {aur_versions[pkg]} of public package '{pkg}' found in AUR (local repo has {local_versions[pkg]}). Removing from {repo_name} to trigger upgrade...")
+
+            try:
+                # Batch remove
+                subprocess.run(["repo-remove", "-w", db_path, "--", *newer_pkgs], check=True)  # nosec B603
+                db_changed = True
+            except Exception as e:
+                print(f"Error batch removing packages: {e}")
 
     if pkgs_to_remove:
         # ⚡ Bolt: Batch subprocess arguments to minimize spawning overhead
