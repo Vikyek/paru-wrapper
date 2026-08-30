@@ -206,7 +206,7 @@ if [ "$is_transaction" = true ]; then
                 done
                 echo "[paru-wrapper] Automatically updating $PARU_WRAPPER_REPO repository database at ${PARU_WRAPPER_REPO_DB}..." >&2
                 if [ "$DRY_RUN" = true ]; then
-                    echo "[paru-wrapper] DRY RUN: would run: repo-add -R -w \"${PARU_WRAPPER_REPO_DB}\" \"${new_pkgs[@]}\"" >&2
+                    echo "[paru-wrapper] DRY RUN: would run: repo-add -R -w \"${PARU_WRAPPER_REPO_DB}\" \"${new_pkgs[*]}\"" >&2
                 else
                     repo-add -R -w "$PARU_WRAPPER_REPO_DB" "${new_pkgs[@]}" || echo "[paru-wrapper] Warning: Failed to update repository database" >&2
                     echo "[paru-wrapper] $PARU_WRAPPER_REPO repository database updated successfully." >&2
@@ -395,9 +395,9 @@ if [ "$is_transaction" = true ]; then
                 echo "  -> $pkg" >&2
             done
             if [ "$DRY_RUN" = true ]; then
-                echo "[paru-wrapper] DRY RUN: would run: sudo pacman -Rns --noconfirm ${orphans_to_remove[*]}" >&2
+                echo "[paru-wrapper] DRY RUN: would run: sudo pacman -Rns --noconfirm -- ${orphans_to_remove[*]}" >&2
             else
-                sudo pacman -Rns --noconfirm "${orphans_to_remove[@]}"
+                sudo pacman -Rns --noconfirm -- "${orphans_to_remove[@]}"
             fi
         fi
     fi
@@ -407,7 +407,7 @@ fi
 if [ "$is_transaction" = true ]; then
     if [ "${FORCE_REBUILD:-0}" = "1" ] || [[ " $* " =~ " --rebuild " ]]; then
         if [ "$DRY_RUN" = true ]; then
-            echo "[paru-wrapper] DRY RUN: would run: /usr/bin/paru --rebuild --pacman /usr/bin/pacman-wrapper $@" >&2
+            echo "[paru-wrapper] DRY RUN: would run: /usr/bin/paru --rebuild --pacman /usr/bin/pacman-wrapper $*" >&2
             exit_code=0
         else
             /usr/bin/paru --rebuild --pacman /usr/bin/pacman-wrapper "$@"
@@ -415,7 +415,7 @@ if [ "$is_transaction" = true ]; then
         fi
     else
         if [ "$DRY_RUN" = true ]; then
-            echo "[paru-wrapper] DRY RUN: would run: /usr/bin/paru --pacman /usr/bin/pacman-wrapper $@" >&2
+            echo "[paru-wrapper] DRY RUN: would run: /usr/bin/paru --pacman /usr/bin/pacman-wrapper $*" >&2
             exit_code=0
         else
             /usr/bin/paru --pacman /usr/bin/pacman-wrapper "$@"
@@ -424,7 +424,7 @@ if [ "$is_transaction" = true ]; then
     fi
 else
     if [ "$DRY_RUN" = true ]; then
-        echo "[paru-wrapper] DRY RUN: would run: /usr/bin/paru $@" >&2
+        echo "[paru-wrapper] DRY RUN: would run: /usr/bin/paru $*" >&2
         exit_code=0
     else
         /usr/bin/paru "$@"
