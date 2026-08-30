@@ -2,6 +2,7 @@
 import subprocess
 import os
 import urllib.request
+import urllib.parse
 import json
 
 db_path = os.environ.get("PARU_WRAPPER_REPO_DB", "")
@@ -38,7 +39,7 @@ def query_aur(packages):
     results = {}
     for i in range(0, len(packages), 50):
         batch = packages[i:i+50]
-        params = "&".join(f"arg[]={pkg}" for pkg in batch)
+        params = "&".join(f"arg[]={urllib.parse.quote(pkg)}" for pkg in batch)
         url = f"https://aur.archlinux.org/rpc/?v=5&type=info&{params}"
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'paru-wrapper-updater'})
