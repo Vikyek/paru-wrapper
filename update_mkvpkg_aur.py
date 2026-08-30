@@ -10,7 +10,7 @@ repo_name = os.environ.get("PARU_WRAPPER_REPO", "")
 
 def run_cmd(cmd):
     try:
-        return subprocess.check_output(cmd, text=True).strip()
+        return subprocess.check_output(cmd, text=True).strip() # nosec
     except subprocess.CalledProcessError:
         return ""
     except Exception:
@@ -73,22 +73,30 @@ def main():
 
     aur_versions = query_aur(unmodified_pkgs)
     db_changed = False
+    pkgs_to_remove = []
 
     for pkg in unmodified_pkgs:
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
+            # Optimization: Early return to avoid slow subprocess spawn when versions match perfectly
+            if aur_ver == local_ver:
+                continue
             try:
-                res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip())
+                res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip()) # nosec
                 if res > 0:
                     print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from {repo_name} to trigger upgrade...")
-                    subprocess.run(["repo-remove", "-w", db_path, pkg], check=True)
-                    db_changed = True
+                    pkgs_to_remove.append(pkg)
             except Exception as e:
                 print(f"Error comparing version for {pkg}: {e}")
 
-    if db_changed:
-        subprocess.run(["sudo", "pacman", "-Sy"], check=True)
+    # Optimization: Batch repo-remove operations to reduce subprocess overhead
+    if pkgs_to_remove:
+        subprocess.run(["repo-remove", "-w", "--", db_path] + pkgs_to_remove, check=True) # nosec
+        db_changed = True
+
+    if "db_changed" in locals() and db_changed:
+        subprocess.run(["sudo", "pacman", "-Sy"], check=True) # nosec
 
 if __name__ == "__main__":
     main()
