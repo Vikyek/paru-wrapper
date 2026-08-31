@@ -38,7 +38,7 @@ jobs:
           BASE_SHA=$(git merge-base origin/${{ github.base_ref }} HEAD)
 
           # Re-apply commit signatures across PR history
-          git rebase --exec "git commit --amend --no-edit -S" $BASE_SHA
+          git rebase --exec "git commit --amend --no-edit -S --allow-empty" $BASE_SHA
 
           # Push re-signed commits back to Jules' PR branch
           git push --force-with-lease origin HEAD:${{ github.head_ref }}
