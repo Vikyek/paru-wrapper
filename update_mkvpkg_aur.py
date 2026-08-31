@@ -10,7 +10,11 @@ repo_name = os.environ.get("PARU_WRAPPER_REPO", "")
 
 def run_cmd(cmd):
     try:
+<<<<<<< HEAD
+        return subprocess.check_output(cmd, text=True).strip() # nosec
+=======
         return subprocess.check_output(cmd, text=True).strip()  # nosec B603
+>>>>>>> jules-16748710278873246037-682baa1b
     except subprocess.CalledProcessError:
         return ""
     except Exception:
