@@ -2,6 +2,7 @@
 # Jules environment setup script for paru-wrapper repository
 
 # Update package lists and install linting tools for Ubuntu
+set -e
 sudo apt-get update
 sudo apt-get install -y shellcheck pylint python3-pip
 
