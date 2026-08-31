@@ -271,7 +271,7 @@ if [ "$is_transaction" = true ]; then
     # Helper to check if package is in official repos
     is_official_pkg() {
         local pkg="$1"
-        if [[ "${_official_pkgs_cache["$pkg"]}" == 1 ]]; then
+        if [[ "${_official_pkgs_cache["$pkg"]:-}" == 1 ]]; then
             return 0
         fi
         return 1
