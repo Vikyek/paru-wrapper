@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""
+Updates the custom local package repository by querying the Arch User Repository (AUR)
+and removing standard, unmodified AUR packages from the local DB when a newer version
+is available remotely. This triggers a rebuild/upgrade during the next paru sync.
+"""
 import subprocess
 import os
 import urllib.request
@@ -11,6 +16,13 @@ projects_dir = os.environ.get("PARU_WRAPPER_PROJECTS_DIR", "")
 repo_name = os.environ.get("PARU_WRAPPER_REPO", "")
 
 def run_cmd(cmd):
+    """
+    Executes a shell command and returns its standard output.
+    Silently catches execution and process errors, returning an empty string on failure.
+
+    @param cmd - List of command arguments (e.g., ['pacman', '-Sl', 'repo'])
+    @returns Stripped standard output string, or an empty string if it fails
+    """
     try:
         return subprocess.check_output(cmd, text=True).strip() # nosec
     except subprocess.CalledProcessError:
@@ -37,6 +49,12 @@ def get_mkvpkg_packages_and_versions():
     return packages
 
 def query_aur(packages):
+    """
+    Resolves the AUR package metadata in batched chunks to prevent URL length limits.
+
+    @param packages - List of package names to query
+    @returns Dictionary of package names to version strings
+    """
     results = {}
     for i in range(0, len(packages), 50):
         batch = packages[i:i+50]
