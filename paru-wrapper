@@ -283,7 +283,7 @@ if [ "$is_transaction" = true ]; then
         if is_official_pkg "$pkg"; then
             filtered_targets+=("$pkg")
         else
-            in_aur=$(curl -s "https://aur.archlinux.org/rpc/?v=5&type=info&arg[]=$pkg" | grep -oP '"resultcount":\s*\K\d+' || echo "0")
+            in_aur=$(curl -s -G "https://aur.archlinux.org/rpc/" --data-urlencode "v=5" --data-urlencode "type=info" --data-urlencode "arg[]=$pkg" | grep -oP '"resultcount":\s*\K\d+' || echo "0")
             if [ "$in_aur" -eq 0 ]; then
                 # Local package not in AUR: rebuild from PROJECTS_DIR if available
                 if [ -d "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}" ] && [ -f "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}/PKGBUILD" ]; then
