@@ -10,7 +10,11 @@ repo_name = os.environ.get("PARU_WRAPPER_REPO", "")
 
 def run_cmd(cmd):
     try:
+<<<<<<< HEAD
+        return subprocess.check_output(cmd, text=True).strip() # nosec
+=======
         return subprocess.check_output(cmd, text=True).strip()  # nosec B603
+>>>>>>> jules-16748710278873246037-682baa1b
     except subprocess.CalledProcessError:
         return ""
     except Exception:
@@ -73,12 +77,23 @@ def main():
 
     aur_versions = query_aur(unmodified_pkgs)
     db_changed = False
+    pkgs_to_remove = []
 
     to_compare = []
     for pkg in unmodified_pkgs:
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
+<<<<<<< HEAD
+            # Optimization: Early return to avoid slow subprocess spawn when versions match perfectly
+            if aur_ver == local_ver:
+                continue
+            try:
+                res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip()) # nosec
+                if res > 0:
+                    print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from {repo_name} to trigger upgrade...")
+                    pkgs_to_remove.append(pkg)
+=======
             if aur_ver == local_ver:
                 continue
             to_compare.extend([pkg, aur_ver, local_ver])
@@ -104,6 +119,7 @@ def main():
                 out = subprocess.check_output(["bash", "-c", script, "--", *batch], text=True)  # nosec B603
                 if out.strip():
                     newer_pkgs.extend(out.strip().splitlines())
+>>>>>>> jules-16748710278873246037-682baa1b
             except Exception as e:
                 print(f"Error in batch version comparison: {e}")
 
@@ -118,8 +134,18 @@ def main():
             except Exception as e:
                 print(f"Error batch removing packages: {e}")
 
+<<<<<<< HEAD
+    # Optimization: Batch repo-remove operations to reduce subprocess overhead
+    if pkgs_to_remove:
+        subprocess.run(["repo-remove", "-w", "--", db_path] + pkgs_to_remove, check=True) # nosec
+        db_changed = True
+
+    if "db_changed" in locals() and db_changed:
+        subprocess.run(["sudo", "pacman", "-Sy"], check=True) # nosec
+=======
     if db_changed:
         subprocess.run(["sudo", "pacman", "-Sy"], check=True)  # nosec B603
+>>>>>>> jules-16748710278873246037-682baa1b
 
 if __name__ == "__main__":
     main()

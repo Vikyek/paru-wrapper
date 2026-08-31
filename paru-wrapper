@@ -249,12 +249,20 @@ if [ "$is_transaction" = true ]; then
         fi
     done
 
+    # Pre-cache official status for all target packages using a single pacman invocation
+    declare -A _official_pkgs_cache=()
+    if [ ${#targets[@]} -gt 0 ]; then
+        while read -r name repo; do
+            if [[ -n "$repo" ]] && [[ "$repo" != "$PARU_WRAPPER_REPO" ]]; then
+                _official_pkgs_cache["$name"]=1
+            fi
+        done < <(LC_ALL=C pacman -Si "${targets[@]}" 2>/dev/null | awk -F '[ \t]*:[ \t]*' '/^Repository/ {r=$2} /^Name/ {print $2, r}')
+    fi
+
     # Helper to check if package is in official repos
     is_official_pkg() {
         local pkg="$1"
-        local repo
-        repo=$(pacman -Si "$pkg" 2>/dev/null | grep -i '^Repository' | awk '{print $3}' || true)
-        if [[ -n "$repo" ]] && [[ "$repo" != "$PARU_WRAPPER_REPO" ]]; then
+        if [[ "${_official_pkgs_cache["$pkg"]}" == 1 ]]; then
             return 0
         fi
         return 1
@@ -449,6 +457,17 @@ if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ] && [ "${hooks_dis
         else
             sudo /usr/bin/rebuild-check || true
         fi
+    fi
+fi
+# Optional agy-syncvault integration
+if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ]; then
+    # Resolve SUDO_USER or USER home directory safely
+    INVOKING_USER="${SUDO_USER:-$USER}"
+    RUN_USER_HOME=$(getent passwd "$INVOKING_USER" | cut -d: -f6)
+    VAULT_SYNC_SCRIPT="${RUN_USER_HOME}/.gemini/config/scripts/auto_sync_vault.py"
+    if [ -f "$VAULT_SYNC_SCRIPT" ]; then
+        echo "[paru-wrapper] Triggering agy-syncvault background sync..." >&2
+        runuser -u "$INVOKING_USER" -- python3 "$VAULT_SYNC_SCRIPT" >/dev/null 2>&1 &
     fi
 fi
 
