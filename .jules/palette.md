@@ -1,0 +1,3 @@
+## 2024-05-25 - [CLI Progress Bars & Accessibility]
+**Learning:** Adding visual elements like progress bars to CLI tools improves UX significantly, but they must degrade gracefully when formatting isn't supported (respect `NO_COLOR`). Using text characters like `#` and `-` is crucial for screen reader compatibility, as opposed to complex Unicode blocks which screen readers might misinterpret or fail to announce correctly.
+**Action:** Always include a `NO_COLOR` fallback for CLI visual elements and rely on accessible ASCII/text characters for structural representations (like progress bars) to ensure an inclusive experience.

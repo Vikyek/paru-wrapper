@@ -43,7 +43,18 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
             fi
 
             percent=$((completed * 100 / total))
-            echo -e "\n\e[1;32m[paru-wrapper] Progress: $completed / $total packages completed ($percent%)\e[0m\n" >&2
+
+            bar_len=20
+            filled=$((percent * bar_len / 100))
+            bar_full="####################"
+            bar_empty="--------------------"
+            bar="[${bar_full:0:filled}${bar_empty:0:bar_len-filled}]"
+
+            if [ -z "${NO_COLOR:-}" ]; then
+                echo -e "\n\e[1;32m[paru-wrapper] Progress: $completed / $total packages completed ($percent%) $bar\e[0m\n" >&2
+            else
+                echo -e "\n[paru-wrapper] Progress: $completed / $total packages completed ($percent%) $bar\n" >&2
+            fi
         fi
     fi
 fi
