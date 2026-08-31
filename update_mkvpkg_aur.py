@@ -94,8 +94,10 @@ def main():
     # Optimization: Batch repo-remove operations to reduce subprocess overhead
     if pkgs_to_remove:
         try:
-            subprocess.run(["repo-remove", "-w", "--", db_path] + pkgs_to_remove, check=True) # nosec
-            db_changed = True
+            for i in range(0, len(pkgs_to_remove), 100):
+                batch = pkgs_to_remove[i:i + 100]
+                subprocess.run(["repo-remove", "-w", "--", db_path] + batch, check=True) # nosec
+                db_changed = True
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             sys.stderr.write(f"[update_mkvpkg_aur] Warning: Failed to run repo-remove: {e}\n")
 
