@@ -3,6 +3,7 @@ import subprocess
 import os
 import urllib.request
 import json
+import sys
 
 db_path = os.environ.get("PARU_WRAPPER_REPO_DB", "")
 projects_dir = os.environ.get("PARU_WRAPPER_PROJECTS_DIR", "")
@@ -47,10 +48,11 @@ def query_aur(packages):
                 for res in data.get('results', []):
                     results[res['Name']] = res['Version']
         except Exception as e:
-            print(f"Error querying AUR for batch: {e}")
+            sys.stderr.write(f"Error querying AUR for batch: {e}\n")
     return results
 
 def main():
+    db_changed = False
     if not db_path or not projects_dir or not repo_name:
         return
     if not os.path.exists(db_path):
@@ -72,7 +74,6 @@ def main():
         return
 
     aur_versions = query_aur(unmodified_pkgs)
-    db_changed = False
     pkgs_to_remove = []
 
     for pkg in unmodified_pkgs:
@@ -88,15 +89,21 @@ def main():
                     print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from {repo_name} to trigger upgrade...")
                     pkgs_to_remove.append(pkg)
             except Exception as e:
-                print(f"Error comparing version for {pkg}: {e}")
+                sys.stderr.write(f"Error comparing version for {pkg}: {e}\n")
 
     # Optimization: Batch repo-remove operations to reduce subprocess overhead
     if pkgs_to_remove:
-        subprocess.run(["repo-remove", "-w", "--", db_path] + pkgs_to_remove, check=True) # nosec
-        db_changed = True
+        try:
+            subprocess.run(["repo-remove", "-w", "--", db_path] + pkgs_to_remove, check=True) # nosec
+            db_changed = True
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            sys.stderr.write(f"[update_mkvpkg_aur] Warning: Failed to run repo-remove: {e}\n")
 
-    if "db_changed" in locals() and db_changed:
-        subprocess.run(["sudo", "pacman", "-Sy"], check=True) # nosec
+    if db_changed:
+        try:
+            subprocess.run(["sudo", "pacman", "-Sy"], check=True) # nosec
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            sys.stderr.write(f"[update_mkvpkg_aur] Warning: Failed to sync database (pacman -Sy): {e}\n")
 
 if __name__ == "__main__":
     main()

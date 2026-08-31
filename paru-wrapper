@@ -208,7 +208,7 @@ if [ "$is_transaction" = true ]; then
                 if [ "$DRY_RUN" = true ]; then
                     echo "[paru-wrapper] DRY RUN: would run: repo-add -R -w \"${PARU_WRAPPER_REPO_DB}\" \"${new_pkgs[@]}\"" >&2
                 else
-                    repo-add -R -w "$PARU_WRAPPER_REPO_DB" "${new_pkgs[@]}"
+                    repo-add -R -w "$PARU_WRAPPER_REPO_DB" "${new_pkgs[@]}" || echo "[paru-wrapper] Warning: Failed to update repository database" >&2
                     echo "[paru-wrapper] $PARU_WRAPPER_REPO repository database updated successfully." >&2
                 fi
             fi
@@ -231,10 +231,19 @@ if [ "$is_transaction" = true ]; then
     # Prune outdated unmodified packages from custom repo using helper script to trigger upgrades from AUR
     if [ -n "$PARU_WRAPPER_REPO" ]; then
         export PARU_WRAPPER_REPO PARU_WRAPPER_REPO_DB PARU_WRAPPER_PROJECTS_DIR
+        aur_updater=()
         if [ -x "/usr/bin/update_mkvpkg_aur.py" ]; then
-            if [ "$DRY_RUN" = true ]; then echo "[paru-wrapper] DRY RUN: would run /usr/bin/update_mkvpkg_aur.py" >&2; else /usr/bin/update_mkvpkg_aur.py; fi
+            aur_updater=("/usr/bin/update_mkvpkg_aur.py")
         elif [ -f "$(dirname "$0")/update_mkvpkg_aur.py" ]; then
-            if [ "$DRY_RUN" = true ]; then echo "[paru-wrapper] DRY RUN: would run python3 $(dirname "$0")/update_mkvpkg_aur.py" >&2; else python3 "$(dirname "$0")/update_mkvpkg_aur.py"; fi
+            aur_updater=(python3 "$(dirname "$0")/update_mkvpkg_aur.py")
+        fi
+
+        if [ ${#aur_updater[@]} -gt 0 ]; then
+            if [ "$DRY_RUN" = true ]; then
+                echo "[paru-wrapper] DRY RUN: would run ${aur_updater[*]}" >&2
+            else
+                "${aur_updater[@]}" || echo "[paru-wrapper] Warning: update_mkvpkg_aur.py failed" >&2
+            fi
         fi
     fi
 
@@ -458,6 +467,7 @@ if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ] && [ "${hooks_dis
             sudo /usr/bin/rebuild-check || true
         fi
     fi
+fi
 # Optional agy-syncvault integration
 if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ]; then
     # Resolve SUDO_USER or USER home directory safely
