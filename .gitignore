@@ -1,5 +1,7 @@
 pkg/
 src/
-paru-wrapper-*.pkg.tar.zst
-paru-wrapper-*.log
+*.pkg.tar.zst
+*.log
 venv/
+__pycache__/
+*.pyc
