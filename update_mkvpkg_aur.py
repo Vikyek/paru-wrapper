@@ -27,9 +27,7 @@ def run_cmd(cmd):
     """
     try:
         return subprocess.check_output(cmd, text=True).strip() # nosec
-    except subprocess.CalledProcessError:
-        return ""
-    except Exception:
+    except (subprocess.CalledProcessError, Exception):
         return ""
 
 def is_installed(pkg):
