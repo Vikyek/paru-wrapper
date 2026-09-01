@@ -128,37 +128,89 @@ def main():
                 sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Installed VCS package '{c_bold}{pkg}-git{c_reset}' takes priority over non-git '{c_bold}{pkg}{c_reset}' in {repo_name}. Removing non-git package...\n")
                 pkgs_to_remove.append(pkg)
 
-    # Optimization: Batch vercmp calls to avoid N subprocess overhead
-    batch_args = []
-    batch_pkgs = []
+    # Optimization: Use pure Python port of alpm_vercmp to avoid subprocess overhead entirely
+    def cmp_ver(a, b):
+        def parse_evr(evr):
+            epoch = 0
+            if ':' in evr:
+                e, evr = evr.split(':', 1)
+                try:
+                    epoch = int(e)
+                except ValueError:
+                    pass
+            release = None
+            if '-' in evr:
+                evr, release = evr.rsplit('-', 1)
+            return epoch, evr, release
+
+        def rpmvercmp(a, b):
+            if a == b: return 0
+            a_len = len(a)
+            b_len = len(b)
+            a_idx = 0
+            b_idx = 0
+            while a_idx < a_len or b_idx < b_len:
+                while a_idx < a_len and not a[a_idx].isalnum(): a_idx += 1
+                while b_idx < b_len and not b[b_idx].isalnum(): b_idx += 1
+                if a_idx == a_len or b_idx == b_len: break
+
+                isnum = False
+                if a[a_idx].isdigit():
+                    a_head = a_idx
+                    while a_idx < a_len and a[a_idx].isdigit(): a_idx += 1
+                    isnum = True
+                else:
+                    a_head = a_idx
+                    while a_idx < a_len and a[a_idx].isalpha(): a_idx += 1
+
+                if b[b_idx].isdigit():
+                    b_head = b_idx
+                    while b_idx < b_len and b[b_idx].isdigit(): b_idx += 1
+                    if not isnum: return -1 # numeric < alpha
+                else:
+                    b_head = b_idx
+                    while b_idx < b_len and b[b_idx].isalpha(): b_idx += 1
+                    if isnum: return 1 # numeric > alpha
+
+                if isnum:
+                    while a_head < a_idx and a[a_head] == '0': a_head += 1
+                    while b_head < b_idx and b[b_head] == '0': b_head += 1
+                    a_part_len = a_idx - a_head
+                    b_part_len = b_idx - b_head
+                    if a_part_len > b_part_len: return 1
+                    elif b_part_len > a_part_len: return -1
+
+                a_part = a[a_head:a_idx]
+                b_part = b[b_head:b_idx]
+                if a_part > b_part: return 1
+                elif a_part < b_part: return -1
+
+            if a_idx == a_len and b_idx == b_len: return 0
+            elif a_idx == a_len: return -1
+            else: return 1
+
+        epoch_a, ver_a, rel_a = parse_evr(a)
+        epoch_b, ver_b, rel_b = parse_evr(b)
+        if epoch_a > epoch_b: return 1
+        elif epoch_a < epoch_b: return -1
+
+        ret = rpmvercmp(ver_a, ver_b)
+        if ret != 0: return ret
+
+        if rel_a and not rel_b: return 1
+        elif not rel_a and rel_b: return -1
+        elif rel_a and rel_b: return rpmvercmp(rel_a, rel_b)
+        return 0
+
     for pkg in unmodified_pkgs:
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
             if aur_ver == local_ver:
                 continue
-            batch_args.extend([aur_ver, local_ver])
-            batch_pkgs.append((pkg, aur_ver, local_ver))
 
-    if batch_args:
-        script = 'for ((i=1; i<=$#; i+=2)); do j=$((i+1)); vercmp "${!i}" "${!j}" || echo 0; done'
-        results = []
-        for i in range(0, len(batch_args), 300):
-            chunk = batch_args[i:i+300]
-            try:
-                output = subprocess.check_output(["bash", "-c", script, "--"] + chunk, text=True).strip().splitlines() # nosec
-                for x in output:
-                    try:
-                        results.append(int(x))
-                    except ValueError:
-                        results.append(0)
-            except Exception as e:
-                sys.stderr.write(f"{c_error}✖ Error{c_reset} in batch version comparison subprocess: {e}\n")
-                results.extend([0] * (len(chunk) // 2))
-
-        for idx, res in enumerate(results):
+            res = cmp_ver(aur_ver, local_ver)
             if res > 0:
-                pkg, aur_ver, local_ver = batch_pkgs[idx]
                 if is_installed(pkg):
                     if auto_update_installed:
                         sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
