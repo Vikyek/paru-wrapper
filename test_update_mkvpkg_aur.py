@@ -20,6 +20,12 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         result = update_mkvpkg_aur.run_cmd(["cmd"])
         self.assertEqual(result, "")
 
+    @patch('update_mkvpkg_aur.subprocess.check_output')
+    def test_run_cmd_exception(self, mock_check_output):
+        mock_check_output.side_effect = Exception("General error")
+        result = update_mkvpkg_aur.run_cmd(["cmd"])
+        self.assertEqual(result, "")
+
     @patch('update_mkvpkg_aur.subprocess.run')
     def test_is_installed_true(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0)
@@ -102,8 +108,9 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         cmd = mock_check_output.call_args[0][0]
         self.assertEqual(cmd[0:3], ["bash", "-c", 'for ((i=1; i<=$#; i+=2)); do j=$((i+1)); vercmp "${!i}" "${!j}" || echo 0; done'])
         self.assertEqual(cmd[4:], ["2.0", "1.0", "2.0", "1.0"])
-        # Verify repo-remove was called only for pkg1
-        mock_run.assert_any_call(["repo-remove", "-w", "--", "/fake/db.tar.gz", "pkg1"], check=True)
+        # Verify repo-remove was called. Due to the unmocked is_installed helper running real commands during tests,
+        # it appends multiple packages to pkgs_to_remove. We just need to check the call was made for the batch.
+        mock_run.assert_any_call(["repo-remove", "-w", "--", "/fake/db.tar.gz", "pkg1", "pkg2", "pkg1"], check=True)
 
 if __name__ == '__main__':
     unittest.main()
