@@ -18,9 +18,9 @@ pkgbase = paru-wrapper
 	source = update_mkvpkg_aur.py
 	source = pacman-wrapper
 	source = LICENSE
-	sha256sums = 356e1539870d8d20f7fa6ce0ed03aa6c7a6a68f871fcbb2d7f35c607a4ba7cb7
+	sha256sums = 692f082a965048c911a2a17923948f21c0f14c5d8054001dc1c4838a32098be9
 	sha256sums = c12dc5a4f356f95d74d24742fd10f62577950a13d2598e5f1ee4a8153f98da65
-	sha256sums = 502cfb8c5338c36d20fadfb02838f2d82ee41b3c4bdecb69251098cc42171aa6
+	sha256sums = 05cbd29e52289828776d6aaaa14b29547c706526e02b72c3b2249586367ec18a
 	sha256sums = 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986
 
 pkgname = paru-wrapper
