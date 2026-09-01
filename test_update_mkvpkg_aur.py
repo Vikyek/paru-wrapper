@@ -70,7 +70,7 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
         expected = {"pkg1": "1.1"}
         self.assertEqual(update_mkvpkg_aur.query_aur(["pkg1"]), expected)
-        
+
         # Verify request URL construction & timeout
         req = mock_urlopen.call_args[0][0]
         self.assertIn("https://aur.archlinux.org/rpc/?v=5&type=info", req.full_url)
@@ -131,14 +131,15 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         mock_urlopen.return_value.__enter__.return_value = mock_response
         self.assertEqual(update_mkvpkg_aur.query_aur(["pkg1"]), {})
 
+    @patch('builtins.print')
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
-    def test_query_aur_invalid_json(self, mock_urlopen):
+    def test_query_aur_invalid_json(self, mock_urlopen, mock_print):
         mock_response = MagicMock()
         mock_response.read.return_value = b"invalid json"
         mock_urlopen.return_value.__enter__.return_value = mock_response
-        with self.assertRaises(RuntimeError) as context:
-            update_mkvpkg_aur.query_aur(["pkg1"])
-        self.assertIn("Error querying AUR", str(context.exception))
+        results = update_mkvpkg_aur.query_aur(["pkg1"])
+        self.assertEqual(results, {})
+        mock_print.assert_called_once()
 
     @patch('update_mkvpkg_aur.subprocess.run')
     @patch('update_mkvpkg_aur.subprocess.check_output')
