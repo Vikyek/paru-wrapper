@@ -12,7 +12,7 @@ source=(
     "update_mkvpkg_aur.py"
     "pacman-wrapper"
 )
-sha256sums=('7bcd4ebbdecf23554aa1f3b1f85718bf4eb764f0ee2b353d730bbc0844d8bb61'
+sha256sums=('0040aa0b45bbe56c9d298f93c4e5042e0a8e4617b89d64783a034ee140c4decc'
             '7b0a564a387c6aef38641e5e7b22a4899da9694989ea0ddb98cb6ec570d2c4e6'
             '502cfb8c5338c36d20fadfb02838f2d82ee41b3c4bdecb69251098cc42171aa6')
 

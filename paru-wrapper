@@ -411,13 +411,13 @@ if [ "$is_transaction" = true ]; then
         new_deps=""
         if [[ -n "$upgrades" ]]; then
             # Query pacman sync database for repository packages dependencies
-            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | grep -E -i '^(Depends On|Depends)' | cut -d: -f2- | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
+            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | grep -iE '^(Depends On|Depends)[[:space:]]*:' | cut -d: -f2- | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
             
             # Query AUR RPC (or paru info) for AUR package dependencies
             aur_deps=""
             aur_upgrades=$(echo "$upgrades" | grep -vFf <(pacman -Slq 2>/dev/null) || true)
             if [[ -n "$aur_upgrades" ]]; then
-                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru -Si 2>/dev/null | grep -E -i '^(Depends On|Depends)' | cut -d: -f2- | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
+                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru -Si 2>/dev/null | grep -iE '^(Depends On|Depends)[[:space:]]*:' | cut -d: -f2- | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
             fi
 
             new_deps=$(echo -e "${repo_deps}\n${aur_deps}" | sort -u)
