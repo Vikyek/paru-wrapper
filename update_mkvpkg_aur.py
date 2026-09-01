@@ -33,6 +33,12 @@ def run_cmd(cmd):
         return ""
 
 def is_installed(pkg):
+    """
+    Checks if a given package is currently installed on the system.
+
+    @param pkg - The name of the package to check
+    @returns True if installed, False otherwise
+    """
     try:
         res = subprocess.run(["pacman", "-Qq", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) # nosec
         return res.returncode == 0
