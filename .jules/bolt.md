@@ -29,6 +29,7 @@
 ## 2024-09-01 - Batching Subprocesses in Python
 **Learning:** Using variable indirection in a chunked bash script (e.g., `for ((i=1; i<=$#; i+=2)); do j=$((i+1)); vercmp "${!i}" "${!j}"; done`) avoids the massive overhead of repeatedly spawning Python subprocesses in a loop, speeding up execution by ~15.7% for large operations.
 **Action:** When making N independent subprocess calls with standard command line tools, construct a bash script string that loops over `"$@"` via index and process the chunked arguments in a single `subprocess.check_output` call instead of using a Python loop.
+
 ## 2024-06-25 - Using pacman -Sl instead of batched pacman -Si queries
 
 **Learning:** When querying a list of target packages to check if they belong to official repositories, using `pacman -Si "${targets[@]}"` can cause errors if any of the packages are missing from the sync database (e.g., they are AUR packages), breaking the entire script or leading to messy error output parsing. Additionally, `pacman -Si` outputs verbose metadata for every package that must be heavily filtered with tools like `awk`.
