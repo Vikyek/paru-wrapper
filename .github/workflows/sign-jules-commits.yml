@@ -7,7 +7,7 @@ on:
 jobs:
   sign:
     # Match Jules bot actors or Jules branch naming conventions
-    if: github.actor == 'google-jules[bot]' || startsWith(github.head_ref, 'jules')
+    if: github.actor == 'google-jules[bot]' || startsWith(github.head_ref, 'jules') || startsWith(github.head_ref, 'bolt-') || contains(github.event.pull_request.body, 'Jules')
     runs-on: ubuntu-latest
     permissions:
       contents: write
