@@ -22,7 +22,7 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
     @patch('update_mkvpkg_aur.subprocess.check_output')
     def test_run_cmd_exception(self, mock_check_output):
-        mock_check_output.side_effect = Exception("Unexpected error")
+        mock_check_output.side_effect = Exception("General error")
         result = update_mkvpkg_aur.run_cmd(["cmd"])
         self.assertEqual(result, "")
 
@@ -96,6 +96,7 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch('os.path.exists', return_value=True)
     @patch('os.path.isdir', return_value=False)
     def test_main_batched_vercmp(self, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run, mock_is_installed):
+        mock_is_installed.return_value = False
         mock_get_pkgs.return_value = {"pkg1": "1.0", "pkg2": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0", "pkg2": "2.0"}
         mock_is_installed.return_value = False
