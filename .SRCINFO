@@ -20,7 +20,7 @@ pkgbase = paru-wrapper
 	source = LICENSE
 	sha256sums = ad5548175c07ce89f945ba0229a0bd4f0c9b13f1f9fc33531a1947c6a8c7a300
 	sha256sums = ccb987a3c8c297db2433e1ad3ad68f4e1867f96e3974ae110393fd448f1f9638
-	sha256sums = 502cfb8c5338c36d20fadfb02838f2d82ee41b3c4bdecb69251098cc42171aa6
+	sha256sums = a43d5f5b55b065aa070bef0f3774770f0a3fa19477eb099f1b191f80ea36fe18
 	sha256sums = 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986
 
 pkgname = paru-wrapper
