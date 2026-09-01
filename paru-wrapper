@@ -335,7 +335,7 @@ if [ "$is_transaction" = true ]; then
             if [[ -n "$repo" ]] && [[ "$repo" != "$PARU_WRAPPER_REPO" ]]; then
                 _official_pkgs_cache["$name"]=1
             fi
-        done < <(LC_ALL=C pacman -Sl 2>/dev/null)
+        done < <(LC_ALL=C pacman -Sl 2>/dev/null | awk -v targets="${targets[*]}" 'BEGIN { split(targets, t, " "); for(i in t) tgts[t[i]]=1 } tgts[$2] { print $1, $2, $3 }')
     fi
 
     # Helper to check if package is in official repos
