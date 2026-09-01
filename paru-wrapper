@@ -54,8 +54,9 @@ if [ -f "$HOME/.config/paru-wrapper/paru-wrapper.conf" ]; then
 fi
 
 # Apply configurable fallbacks (Environment > Config > Defaults)
-PARU_WRAPPER_REPO="${PARU_WRAPPER_REPO:-/mnt/v/Data/makepkg/packages}"
-PARU_WRAPPER_REPO_DB="${PARU_WRAPPER_REPO_DB:-${PARU_WRAPPER_REPO}/MKVPKG.db.tar.gz}"
+PARU_WRAPPER_REPO="${PARU_WRAPPER_REPO:-MKVPKG}"
+PARU_WRAPPER_REPO_DIR="${PARU_WRAPPER_REPO_DIR:-/mnt/v/Data/makepkg/packages}"
+PARU_WRAPPER_REPO_DB="${PARU_WRAPPER_REPO_DB:-${PARU_WRAPPER_REPO_DIR}/MKVPKG.db.tar.gz}"
 PARU_WRAPPER_PROJECTS_DIR="${PARU_WRAPPER_PROJECTS_DIR:-${HOME:-/root}/Projects}"
 PARU_WRAPPER_DRY_RUN="${PARU_WRAPPER_DRY_RUN:-false}"
 PARU_WRAPPER_AUTO_UPDATE_INSTALLED="${PARU_WRAPPER_AUTO_UPDATE_INSTALLED:-true}"
@@ -239,6 +240,20 @@ if [ "$is_transaction" = true ]; then
             REPO_DIR=$(dirname "$PARU_WRAPPER_REPO_DB")
             mapfile -t new_pkgs < <(find "$REPO_DIR" -name "*.pkg.tar.zst" -newer "$start_marker" 2>/dev/null || true)
             if [ ${#new_pkgs[@]} -gt 0 ]; then
+                filtered_new_pkgs=()
+                for pkg_file in "${new_pkgs[@]}"; do
+                    pkg_base=$(basename "$pkg_file")
+                    pkg_name=$(echo "$pkg_base" | sed -E 's/-[0-9].*//')
+                    if [[ ! "$pkg_name" =~ -git$ ]] && pacman -Qq "${pkg_name}-git" >/dev/null 2>&1; then
+                        echo "[paru-wrapper] Skipping auto-indexing of '$pkg_base' because installed '${pkg_name}-git' takes priority." >&2
+                        rm -f "$pkg_file" 2>/dev/null || true
+                    else
+                        filtered_new_pkgs+=("$pkg_file")
+                    fi
+                done
+                new_pkgs=("${filtered_new_pkgs[@]}")
+            fi
+            if [ ${#new_pkgs[@]} -gt 0 ]; then
                 echo -e "\n[paru-wrapper] Detected ${#new_pkgs[@]} newly built package(s):" >&2
                 for pkg in "${new_pkgs[@]}"; do
                     echo "  -> $(basename "$pkg")" >&2
@@ -289,13 +304,29 @@ if [ "$is_transaction" = true ]; then
     # Extract target packages and other arguments
     targets=()
     other_args=()
+    is_rebuild_cmd=false
     for arg in "$@"; do
         if [[ "$arg" =~ ^- ]]; then
             other_args+=("$arg")
+            if [[ "$arg" == "--rebuild" || "$arg" == "--redownload" ]]; then
+                is_rebuild_cmd=true
+            fi
         else
             targets+=("$arg")
         fi
     done
+
+    # If --rebuild or --redownload is requested, purge stale prebuilt binaries from local repo
+    if [ "$is_rebuild_cmd" = true ] && [ ${#targets[@]} -gt 0 ]; then
+        export FORCE_REBUILD=1
+        REPO_DIR=$(dirname "$PARU_WRAPPER_REPO_DB")
+        for pkg in "${targets[@]}"; do
+            echo "[paru-wrapper] Rebuild requested for '$pkg'. Purging stale binaries from $PARU_WRAPPER_REPO..." >&2
+            rm -f "$REPO_DIR/$pkg-"*.pkg.tar.zst 2>/dev/null || true
+            repo-remove -w "$PARU_WRAPPER_REPO_DB" "$pkg" 2>/dev/null || true
+        done
+        sudo pacman -Sy >/dev/null 2>&1 || true
+    fi
 
     # Pre-cache official status for all target packages using a single pacman invocation
     declare -A _official_pkgs_cache=()

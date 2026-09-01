@@ -88,7 +88,9 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
     @patch('os.path.exists', return_value=True)
     @patch('os.path.isdir', return_value=False)
-    def test_main_batched_vercmp(self, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+    @patch('update_mkvpkg_aur.is_installed')
+    def test_main_batched_vercmp(self, mock_is_installed, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_is_installed.side_effect = lambda pkg: not pkg.endswith("-git")
         mock_get_pkgs.return_value = {"pkg1": "1.0", "pkg2": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0", "pkg2": "2.0"}
         # Mock vercmp output returning 1 for pkg1 (needs update) and 0 for pkg2 (same/older)
@@ -114,8 +116,9 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
     @patch('os.path.exists', return_value=True)
     @patch('os.path.isdir', return_value=False)
-    @patch('update_mkvpkg_aur.is_installed', return_value=True)
+    @patch('update_mkvpkg_aur.is_installed')
     def test_main_batched_vercmp_value_error(self, mock_is_installed, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_is_installed.side_effect = lambda pkg: not pkg.endswith("-git")
         mock_get_pkgs.return_value = {"pkg1": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0"}
         mock_check_output.return_value = "invalid_int\n"
@@ -132,8 +135,9 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
     @patch('os.path.exists', return_value=True)
     @patch('os.path.isdir', return_value=False)
-    @patch('update_mkvpkg_aur.is_installed', return_value=True)
+    @patch('update_mkvpkg_aur.is_installed')
     def test_main_batched_vercmp_subprocess_error(self, mock_is_installed, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_is_installed.side_effect = lambda pkg: not pkg.endswith("-git")
         mock_get_pkgs.return_value = {"pkg1": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0"}
         mock_check_output.side_effect = Exception("error")
@@ -150,8 +154,9 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
     @patch('os.path.exists', return_value=True)
     @patch('os.path.isdir', return_value=False)
-    @patch('update_mkvpkg_aur.is_installed', return_value=False)
+    @patch('update_mkvpkg_aur.is_installed')
     def test_main_not_installed(self, mock_is_installed, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_is_installed.return_value = False
         mock_get_pkgs.return_value = {"pkg1": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0"}
         mock_check_output.return_value = "1\n"
@@ -169,8 +174,9 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch.object(update_mkvpkg_aur, 'auto_update_installed', False)
     @patch('os.path.exists', return_value=True)
     @patch('os.path.isdir', return_value=False)
-    @patch('update_mkvpkg_aur.is_installed', return_value=True)
+    @patch('update_mkvpkg_aur.is_installed')
     def test_main_auto_update_disabled(self, mock_is_installed, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_is_installed.side_effect = lambda pkg: not pkg.endswith("-git")
         mock_get_pkgs.return_value = {"pkg1": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0"}
         mock_check_output.return_value = "1\n"
@@ -187,8 +193,9 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
     @patch('os.path.exists', return_value=True)
     @patch('os.path.isdir', return_value=False)
-    @patch('update_mkvpkg_aur.is_installed', return_value=True)
+    @patch('update_mkvpkg_aur.is_installed')
     def test_main_repo_remove_error(self, mock_is_installed, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_is_installed.side_effect = lambda pkg: not pkg.endswith("-git")
         mock_get_pkgs.return_value = {"pkg1": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0"}
         mock_check_output.return_value = "1\n"
@@ -208,8 +215,9 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
     @patch('os.path.exists', return_value=True)
     @patch('os.path.isdir', return_value=False)
-    @patch('update_mkvpkg_aur.is_installed', return_value=True)
+    @patch('update_mkvpkg_aur.is_installed')
     def test_main_pacman_sync_error(self, mock_is_installed, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_is_installed.side_effect = lambda pkg: not pkg.endswith("-git")
         mock_get_pkgs.return_value = {"pkg1": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0"}
         mock_check_output.return_value = "1\n"
