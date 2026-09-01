@@ -79,13 +79,27 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             update_mkvpkg_aur.query_aur(["pkg1"])
 
+    @patch('update_mkvpkg_aur.urllib.request.urlopen')
+    def test_query_aur_multiple_success(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "results": [
+                {"Name": "pkg1", "Version": "1.1"},
+                {"Name": "pkg2", "Version": "2.2"}
+            ]
+        }).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        expected = {"pkg1": "1.1", "pkg2": "2.2"}
+        self.assertEqual(update_mkvpkg_aur.query_aur(["pkg1", "pkg2"]), expected)
+
     def test_query_aur_empty_packages(self):
         self.assertEqual(update_mkvpkg_aur.query_aur([]), {})
 
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
     def test_query_aur_missing_results(self, mock_urlopen):
         mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps({"error": "not found"}).encode('utf-8')
+        mock_response.read.return_value = b'{"error": "not found"}'
         mock_urlopen.return_value.__enter__.return_value = mock_response
         self.assertEqual(update_mkvpkg_aur.query_aur(["pkg1"]), {})
 
