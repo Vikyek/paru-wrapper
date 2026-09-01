@@ -113,30 +113,49 @@ def main():
     aur_versions = query_aur(unmodified_pkgs)
     pkgs_to_remove = []
 
+    # Optimization: Batch vercmp calls to avoid N subprocess overhead
+    batch_args = []
+    batch_pkgs = []
     for pkg in unmodified_pkgs:
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
-            # Optimization: Early return to avoid slow subprocess spawn when versions match perfectly
             if aur_ver == local_ver:
                 continue
+            batch_args.extend([aur_ver, local_ver])
+            batch_pkgs.append((pkg, aur_ver, local_ver))
+
+    if batch_args:
+        script = 'for ((i=1; i<=$#; i+=2)); do j=$((i+1)); vercmp "${!i}" "${!j}" || echo 0; done'
+        results = []
+        for i in range(0, len(batch_args), 300):
+            chunk = batch_args[i:i+300]
             try:
-                res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip()) # nosec
-                if res > 0:
-                    c_info = "" if os.environ.get("NO_COLOR") else "\033[1;34m"
-                    c_reset = "" if os.environ.get("NO_COLOR") else "\033[0m"
-                    c_bold = "" if os.environ.get("NO_COLOR") else "\033[1m"
-                    if is_installed(pkg):
-                        if auto_update_installed:
-                            sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
-                            pkgs_to_remove.append(pkg)
-                        else:
-                            sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade.\n")
-                    else:
-                        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of public package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade...\n")
-                        pkgs_to_remove.append(pkg)
+                output = subprocess.check_output(["bash", "-c", script, "--"] + chunk, text=True).strip().splitlines() # nosec
+                for x in output:
+                    try:
+                        results.append(int(x))
+                    except ValueError:
+                        results.append(0)
             except Exception as e:
-                sys.stderr.write(f"Error comparing version for {pkg}: {e}\n")
+                sys.stderr.write(f"Error in batch version comparison subprocess: {e}\n")
+                results.extend([0] * (len(chunk) // 2))
+
+        for idx, res in enumerate(results):
+            if res > 0:
+                pkg, aur_ver, local_ver = batch_pkgs[idx]
+                c_info = "" if os.environ.get("NO_COLOR") else "\033[1;34m"
+                c_reset = "" if os.environ.get("NO_COLOR") else "\033[0m"
+                c_bold = "" if os.environ.get("NO_COLOR") else "\033[1m"
+                if is_installed(pkg):
+                    if auto_update_installed:
+                        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
+                        pkgs_to_remove.append(pkg)
+                    else:
+                        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade.\n")
+                else:
+                    sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of public package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade...\n")
+                    pkgs_to_remove.append(pkg)
 
     # Optimization: Batch repo-remove operations to reduce subprocess overhead
     if pkgs_to_remove:
