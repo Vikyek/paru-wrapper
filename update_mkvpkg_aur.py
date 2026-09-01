@@ -90,7 +90,10 @@ def main():
             try:
                 res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip()) # nosec
                 if res > 0:
-                    print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from {repo_name} to trigger upgrade...")
+                    c_info = "" if os.environ.get("NO_COLOR") else "\033[1;34m"
+                    c_reset = "" if os.environ.get("NO_COLOR") else "\033[0m"
+                    c_bold = "" if os.environ.get("NO_COLOR") else "\033[1m"
+                    sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of public package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade...\n")
                     pkgs_to_remove.append(pkg)
             except Exception as e:
                 sys.stderr.write(f"Error comparing version for {pkg}: {e}\n")
