@@ -31,18 +31,19 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         mock_run.return_value = MagicMock(returncode=1)
         self.assertFalse(update_mkvpkg_aur.is_installed("pkg"))
 
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
     @patch('update_mkvpkg_aur.run_cmd')
     def test_get_mkvpkg_packages_and_versions(self, mock_run_cmd):
-        update_mkvpkg_aur.repo_name = "testrepo"
         mock_run_cmd.return_value = "testrepo pkg1 1.0\ntestrepo pkg2 2.0\notherrepo pkg3 3.0"
         expected = {"pkg1": "1.0", "pkg2": "2.0"}
         self.assertEqual(update_mkvpkg_aur.get_mkvpkg_packages_and_versions(), expected)
         mock_run_cmd.assert_called_once_with(["pacman", "-Sl", "testrepo"])
 
+    @patch.object(update_mkvpkg_aur, 'repo_name', '')
     @patch('update_mkvpkg_aur.run_cmd')
     def test_get_mkvpkg_packages_and_versions_empty(self, mock_run_cmd):
-        update_mkvpkg_aur.repo_name = ""
         self.assertEqual(update_mkvpkg_aur.get_mkvpkg_packages_and_versions(), {})
+        mock_run_cmd.assert_not_called()
 
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
     def test_query_aur_success(self, mock_urlopen):
@@ -54,6 +55,23 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
         expected = {"pkg1": "1.1"}
         self.assertEqual(update_mkvpkg_aur.query_aur(["pkg1"]), expected)
+        
+        # Verify request URL construction & timeout
+        req = mock_urlopen.call_args[0][0]
+        self.assertIn("https://aur.archlinux.org/rpc/?v=5&type=info", req.full_url)
+        self.assertIn("arg%5B%5D=pkg1", req.full_url)
+        self.assertEqual(mock_urlopen.call_args[1].get("timeout"), 10)
+
+    @patch('update_mkvpkg_aur.urllib.request.urlopen')
+    def test_query_aur_batching(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"results": []}).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        # Test batching over 50 packages (e.g. 75 packages = 2 requests)
+        pkgs = [f"pkg{i}" for i in range(75)]
+        update_mkvpkg_aur.query_aur(pkgs)
+        self.assertEqual(mock_urlopen.call_count, 2)
 
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
     def test_query_aur_failure(self, mock_urlopen):
