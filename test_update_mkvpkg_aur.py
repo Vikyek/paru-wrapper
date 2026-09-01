@@ -105,5 +105,169 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         # Verify repo-remove was called only for pkg1
         mock_run.assert_any_call(["repo-remove", "-w", "--", "/fake/db.tar.gz", "pkg1"], check=True)
 
+    @patch('update_mkvpkg_aur.subprocess.check_output')
+    def test_run_cmd_exception(self, mock_check_output):
+        mock_check_output.side_effect = Exception("Generic error")
+        result = update_mkvpkg_aur.run_cmd(["cmd"])
+        self.assertEqual(result, "")
+
+    @patch('update_mkvpkg_aur.subprocess.run')
+    def test_is_installed_exception(self, mock_run):
+        mock_run.side_effect = Exception("Generic error")
+        self.assertFalse(update_mkvpkg_aur.is_installed("pkg"))
+
+    @patch.object(update_mkvpkg_aur, 'db_path', '')
+    def test_main_missing_env_vars(self):
+        self.assertIsNone(update_mkvpkg_aur.main())
+
+    @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
+    @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
+    @patch('os.path.exists', return_value=False)
+    def test_main_db_not_exists(self, mock_exists):
+        self.assertIsNone(update_mkvpkg_aur.main())
+
+    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
+    @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
+    @patch('os.path.exists', return_value=True)
+    def test_main_no_unmodified_pkgs(self, mock_exists, mock_get_pkgs):
+        mock_get_pkgs.return_value = {}
+        self.assertIsNone(update_mkvpkg_aur.main())
+
+    @patch('update_mkvpkg_aur.subprocess.run')
+    @patch('update_mkvpkg_aur.subprocess.check_output')
+    @patch('update_mkvpkg_aur.query_aur')
+    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
+    @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
+    @patch('os.path.exists', return_value=True)
+    @patch('os.path.isdir', return_value=False)
+    def test_main_same_version(self, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_get_pkgs.return_value = {"pkg1": "1.0"}
+        mock_query_aur.return_value = {"pkg1": "1.0"}
+        update_mkvpkg_aur.main()
+        mock_check_output.assert_not_called()
+
+    @patch('update_mkvpkg_aur.subprocess.run')
+    @patch('update_mkvpkg_aur.subprocess.check_output')
+    @patch('update_mkvpkg_aur.query_aur')
+    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
+    @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
+    @patch('os.path.exists', return_value=True)
+    @patch('os.path.isdir', return_value=False)
+    def test_main_vercmp_value_error(self, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_get_pkgs.return_value = {"pkg1": "1.0"}
+        mock_query_aur.return_value = {"pkg1": "2.0"}
+        mock_check_output.return_value = "invalid_int\n"
+        update_mkvpkg_aur.main()
+        # Invalid int becomes 0, so no repo-remove called
+        mock_run.assert_not_called()
+
+    @patch('update_mkvpkg_aur.subprocess.run')
+    @patch('update_mkvpkg_aur.subprocess.check_output')
+    @patch('update_mkvpkg_aur.query_aur')
+    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
+    @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
+    @patch('os.path.exists', return_value=True)
+    @patch('os.path.isdir', return_value=False)
+    def test_main_vercmp_exception(self, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_get_pkgs.return_value = {"pkg1": "1.0"}
+        mock_query_aur.return_value = {"pkg1": "2.0"}
+        mock_check_output.side_effect = Exception("vercmp error")
+        update_mkvpkg_aur.main()
+        mock_run.assert_not_called()
+
+    @patch('update_mkvpkg_aur.subprocess.run')
+    @patch('update_mkvpkg_aur.subprocess.check_output')
+    @patch('update_mkvpkg_aur.query_aur')
+    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    @patch('update_mkvpkg_aur.is_installed')
+    @patch.object(update_mkvpkg_aur, 'auto_update_installed', False)
+    @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
+    @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
+    @patch('os.path.exists', return_value=True)
+    @patch('os.path.isdir', return_value=False)
+    def test_main_installed_auto_update_disabled(self, mock_isdir, mock_exists, mock_is_installed, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_get_pkgs.return_value = {"pkg1": "1.0"}
+        mock_query_aur.return_value = {"pkg1": "2.0"}
+        mock_check_output.return_value = "1\n"
+        mock_is_installed.return_value = True
+
+        update_mkvpkg_aur.main()
+        mock_run.assert_not_called()
+
+    @patch('update_mkvpkg_aur.subprocess.run')
+    @patch('update_mkvpkg_aur.subprocess.check_output')
+    @patch('update_mkvpkg_aur.query_aur')
+    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    @patch('update_mkvpkg_aur.is_installed')
+    @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
+    @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
+    @patch('os.path.exists', return_value=True)
+    @patch('os.path.isdir', return_value=False)
+    def test_main_not_installed(self, mock_isdir, mock_exists, mock_is_installed, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_get_pkgs.return_value = {"pkg1": "1.0"}
+        mock_query_aur.return_value = {"pkg1": "2.0"}
+        mock_check_output.return_value = "1\n"
+        mock_is_installed.return_value = False
+
+        update_mkvpkg_aur.main()
+        mock_run.assert_any_call(["repo-remove", "-w", "--", "/fake/db.tar.gz", "pkg1"], check=True)
+
+    @patch('update_mkvpkg_aur.subprocess.run')
+    @patch('update_mkvpkg_aur.subprocess.check_output')
+    @patch('update_mkvpkg_aur.query_aur')
+    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    @patch('update_mkvpkg_aur.is_installed')
+    @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
+    @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
+    @patch('os.path.exists', return_value=True)
+    @patch('os.path.isdir', return_value=False)
+    def test_main_repo_remove_exception(self, mock_isdir, mock_exists, mock_is_installed, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_get_pkgs.return_value = {"pkg1": "1.0"}
+        mock_query_aur.return_value = {"pkg1": "2.0"}
+        mock_check_output.return_value = "1\n"
+        mock_is_installed.return_value = False
+        mock_run.side_effect = subprocess.CalledProcessError(1, ["repo-remove"])
+
+        update_mkvpkg_aur.main()
+        mock_run.assert_called_once()
+
+    @patch('update_mkvpkg_aur.subprocess.run')
+    @patch('update_mkvpkg_aur.subprocess.check_output')
+    @patch('update_mkvpkg_aur.query_aur')
+    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    @patch('update_mkvpkg_aur.is_installed')
+    @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
+    @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
+    @patch('os.path.exists', return_value=True)
+    @patch('os.path.isdir', return_value=False)
+    def test_main_pacman_sy_exception(self, mock_isdir, mock_exists, mock_is_installed, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+        mock_get_pkgs.return_value = {"pkg1": "1.0"}
+        mock_query_aur.return_value = {"pkg1": "2.0"}
+        mock_check_output.return_value = "1\n"
+        mock_is_installed.return_value = False
+
+        def mock_run_side_effect(cmd, *args, **kwargs):
+            if cmd == ["sudo", "pacman", "-Sy"]:
+                raise subprocess.CalledProcessError(1, cmd)
+            return MagicMock(returncode=0)
+        mock_run.side_effect = mock_run_side_effect
+
+        update_mkvpkg_aur.main()
+        # Expecting 2 calls: repo-remove and pacman -Sy
+        self.assertEqual(mock_run.call_count, 2)
+
 if __name__ == '__main__':
     unittest.main()
