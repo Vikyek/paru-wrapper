@@ -45,6 +45,21 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         self.assertEqual(update_mkvpkg_aur.get_mkvpkg_packages_and_versions(), {})
         mock_run_cmd.assert_not_called()
 
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
+    @patch('update_mkvpkg_aur.run_cmd')
+    def test_get_mkvpkg_packages_and_versions_no_output(self, mock_run_cmd):
+        mock_run_cmd.return_value = ""
+        self.assertEqual(update_mkvpkg_aur.get_mkvpkg_packages_and_versions(), {})
+        mock_run_cmd.assert_called_once_with(["pacman", "-Sl", "testrepo"])
+
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
+    @patch('update_mkvpkg_aur.run_cmd')
+    def test_get_mkvpkg_packages_and_versions_malformed_output(self, mock_run_cmd):
+        mock_run_cmd.return_value = "testrepo pkg1\ntestrepo pkg2 2.0\n\notherrepo pkg3 3.0"
+        expected = {"pkg2": "2.0"}
+        self.assertEqual(update_mkvpkg_aur.get_mkvpkg_packages_and_versions(), expected)
+        mock_run_cmd.assert_called_once_with(["pacman", "-Sl", "testrepo"])
+
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
     def test_query_aur_success(self, mock_urlopen):
         mock_response = MagicMock()
