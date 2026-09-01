@@ -79,6 +79,25 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             update_mkvpkg_aur.query_aur(["pkg1"])
 
+    def test_query_aur_empty_packages(self):
+        self.assertEqual(update_mkvpkg_aur.query_aur([]), {})
+
+    @patch('update_mkvpkg_aur.urllib.request.urlopen')
+    def test_query_aur_missing_results(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({"error": "not found"}).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        self.assertEqual(update_mkvpkg_aur.query_aur(["pkg1"]), {})
+
+    @patch('update_mkvpkg_aur.urllib.request.urlopen')
+    def test_query_aur_invalid_json(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b"invalid json"
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        with self.assertRaises(RuntimeError) as context:
+            update_mkvpkg_aur.query_aur(["pkg1"])
+        self.assertIn("Error querying AUR", str(context.exception))
+
     @patch('update_mkvpkg_aur.subprocess.run')
     @patch('update_mkvpkg_aur.subprocess.check_output')
     @patch('update_mkvpkg_aur.query_aur')
