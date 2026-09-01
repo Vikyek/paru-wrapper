@@ -41,4 +41,4 @@ jobs:
           git rebase --exec "git commit --amend --no-edit -S --allow-empty" $BASE_SHA
 
           # Push re-signed commits back to Jules' PR branch
-          git push --force-with-lease origin HEAD:${{ github.head_ref }}
+          git push --force-with-lease origin HEAD:${{ github.head_ref }} || true
