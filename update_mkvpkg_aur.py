@@ -10,6 +10,39 @@ import urllib.request
 import urllib.parse
 import json
 import sys
+import warnings
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    try:
+        import pkg_resources
+    except ImportError:
+        pkg_resources = None
+
+def arch_vercmp(v1: str, v2: str) -> int:
+    def split_epoch(v):
+        if ':' in v:
+            e, val = v.split(':', 1)
+            return int(e), val
+        return 0, v
+
+    e1, val1 = split_epoch(v1)
+    e2, val2 = split_epoch(v2)
+    if e1 != e2:
+        return 1 if e1 > e2 else -1
+
+    if pkg_resources:
+        p1 = pkg_resources.parse_version(val1)
+        p2 = pkg_resources.parse_version(val2)
+        if p1 > p2: return 1
+        elif p1 < p2: return -1
+        else: return 0
+    else:
+        # Fallback to subprocess vercmp if pkg_resources is not available
+        try:
+            return int(subprocess.check_output(["vercmp", val1, val2], text=True).strip())
+        except (subprocess.CalledProcessError, ValueError, FileNotFoundError):
+            return 0
 
 db_path = os.environ.get("PARU_WRAPPER_REPO_DB", "")
 projects_dir = os.environ.get("PARU_WRAPPER_PROJECTS_DIR", "")
@@ -133,20 +166,14 @@ def main():
             batch_pkgs.append((pkg, aur_ver, local_ver))
 
     if batch_args:
-        script = 'for ((i=1; i<=$#; i+=2)); do j=$((i+1)); vercmp "${!i}" "${!j}" || echo 0; done'
         results = []
-        for i in range(0, len(batch_args), 300):
-            chunk = batch_args[i:i+300]
+        for i in range(0, len(batch_args), 2):
             try:
-                output = subprocess.check_output(["bash", "-c", script, "--"] + chunk, text=True).strip().splitlines() # nosec
-                for x in output:
-                    try:
-                        results.append(int(x))
-                    except ValueError:
-                        results.append(0)
+                res = arch_vercmp(batch_args[i], batch_args[i+1])
+                results.append(res)
             except Exception as e:
-                sys.stderr.write(f"{c_error}✖ Error{c_reset} in batch version comparison subprocess: {e}\n")
-                results.extend([0] * (len(chunk) // 2))
+                sys.stderr.write(f"{c_error}✖ Error{c_reset} in version comparison for {batch_args[i]} vs {batch_args[i+1]}: {e}\n")
+                results.append(0)
 
         for idx, res in enumerate(results):
             if res > 0:

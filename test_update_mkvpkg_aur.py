@@ -80,28 +80,28 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
             update_mkvpkg_aur.query_aur(["pkg1"])
 
     @patch('update_mkvpkg_aur.subprocess.run')
-    @patch('update_mkvpkg_aur.subprocess.check_output')
     @patch('update_mkvpkg_aur.query_aur')
     @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    @patch('update_mkvpkg_aur.arch_vercmp')
     @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
     @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
     @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
     @patch('os.path.exists', return_value=True)
     @patch('os.path.isdir', return_value=False)
-    def test_main_batched_vercmp(self, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+    def test_main_batched_vercmp(self, mock_isdir, mock_exists, mock_arch_vercmp, mock_get_pkgs, mock_query_aur, mock_run):
         mock_get_pkgs.return_value = {"pkg1": "1.0", "pkg2": "1.0"}
-        mock_query_aur.return_value = {"pkg1": "2.0", "pkg2": "2.0"}
-        # Mock vercmp output returning 1 for pkg1 (needs update) and 0 for pkg2 (same/older)
-        mock_check_output.return_value = "1\n0\n"
+        mock_query_aur.return_value = {"pkg1": "2.0", "pkg2": "1.0"}
+
+        # mock_arch_vercmp should return 1 for pkg1 (2.0 > 1.0) and 0 for pkg2 (1.0 == 1.0)
+        def side_effect_vercmp(v1, v2):
+            if v1 == "2.0" and v2 == "1.0": return 1
+            return 0
+        mock_arch_vercmp.side_effect = side_effect_vercmp
+
         mock_run.return_value = MagicMock(returncode=0)
 
         update_mkvpkg_aur.main()
 
-        # Verify bash script was executed with chunked arguments
-        mock_check_output.assert_called_once()
-        cmd = mock_check_output.call_args[0][0]
-        self.assertEqual(cmd[0:3], ["bash", "-c", 'for ((i=1; i<=$#; i+=2)); do j=$((i+1)); vercmp "${!i}" "${!j}" || echo 0; done'])
-        self.assertEqual(cmd[4:], ["2.0", "1.0", "2.0", "1.0"])
         # Verify repo-remove was called only for pkg1
         mock_run.assert_any_call(["repo-remove", "-w", "--", "/fake/db.tar.gz", "pkg1"], check=True)
 
