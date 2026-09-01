@@ -10,6 +10,33 @@
 
 set -euo pipefail
 
+declare -gA _aur_pkgs_cache=()
+
+fetch_aur_metadata_batch() {
+    local pkgs=("$@")
+    local chunk_size=50
+    local i chunk query_args curl_out
+
+    [[ ${#pkgs[@]} -eq 0 ]] && return 0
+
+    for ((i = 0; i < ${#pkgs[@]}; i += chunk_size)); do
+        chunk=("${pkgs[@]:i:chunk_size}")
+        query_args=()
+
+        for pkg in "${chunk[@]}"; do
+            query_args+=(--data-urlencode "arg[]=$pkg")
+        done
+
+        curl_out=$(curl -s -f -G "https://aur.archlinux.org/rpc/v5/info" "${query_args[@]}" 2>/dev/null) || continue
+
+        while IFS=$'\t' read -r name version; do
+            if [[ -n "$name" && "$name" != "null" ]]; then
+                _aur_pkgs_cache["$name"]="$version"
+            fi
+        done < <(echo "$curl_out" | jq -r '.results[]? | "\(.Name)\t\(.Version)"' 2>/dev/null)
+    done
+}
+
 # Initialize variables to avoid unbound variable errors
 PARU_WRAPPER_REPO=""
 PARU_WRAPPER_REPO_DB=""
@@ -289,13 +316,28 @@ if [ "$is_transaction" = true ]; then
         return 1
     }
 
+    # Pre-fetch AUR metadata in batches
+    unofficial_targets=()
+    for pkg in "${targets[@]}"; do
+        if ! is_official_pkg "$pkg"; then
+            unofficial_targets+=("$pkg")
+        fi
+    done
+    if [[ ${#unofficial_targets[@]} -gt 0 ]]; then
+        fetch_aur_metadata_batch "${unofficial_targets[@]}"
+    fi
+
     # Filter targets and rebuild local packages
     filtered_targets=()
     for pkg in "${targets[@]}"; do
         if is_official_pkg "$pkg"; then
             filtered_targets+=("$pkg")
         else
-            in_aur=$(curl -s -G "https://aur.archlinux.org/rpc/" --data-urlencode "v=5" --data-urlencode "type=info" --data-urlencode "arg[]=$pkg" | grep -oP '"resultcount":\s*\K\d+' || echo "0")
+            if [[ -n "${_aur_pkgs_cache["$pkg"]+x}" ]]; then
+                in_aur=1
+            else
+                in_aur=0
+            fi
             if [ "$in_aur" -eq 0 ]; then
                 # Local package not in AUR: rebuild from PROJECTS_DIR if available
                 if [ -d "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}" ] && [ -f "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}/PKGBUILD" ]; then

@@ -21,3 +21,7 @@
 
 **Learning:** When navigating process trees in bash scripts (e.g. going up the PPID chain), invoking `ps` and `tr` repeatedly in a while loop introduces substantial overhead because a new process is forked on every iteration.
 **Action:** Instead of `ps -o ppid= -p $pid`, read directly from `/proc/$pid/stat` using pure bash builtins (`read` and parameter expansion) to avoid any subprocess forks. For safety, extract PPID using parameter expansion `stat_tail="${stat_line##*)}"` to prevent spoofing from process names containing parentheses. This dramatically speeds up process tree traversal.
+
+## 2024-05-18 - Safe Batched Network Lookups in Bash
+**Learning:** When making multiple network queries to an API like the AUR RPC from Bash, doing so iteratively in a loop causes O(N) subprocess forks and network delays.
+**Action:** Extract the queries into a batch array, pass them to a dedicated helper function to chunk the requests, use `curl -G --data-urlencode` to fetch the metadata, parse it with `jq`, and cache the result in a global associative array `declare -gA` populated via process substitution (`< <(echo "$out")`). Lookups inside the iteration loop become O(1) cache queries (e.g., `[[ -n "${_cache["$pkg"]+x}" ]]`).
