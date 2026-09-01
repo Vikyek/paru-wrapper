@@ -73,11 +73,24 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         update_mkvpkg_aur.query_aur(pkgs)
         self.assertEqual(mock_urlopen.call_count, 2)
 
+    @patch('builtins.print')
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
-    def test_query_aur_failure(self, mock_urlopen):
-        mock_urlopen.side_effect = Exception("Network error")
-        with self.assertRaises(RuntimeError):
-            update_mkvpkg_aur.query_aur(["pkg1"])
+    def test_query_aur_failure_continues(self, mock_urlopen, mock_print):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "results": [{"Name": "pkg55", "Version": "2.0"}]
+        }).encode('utf-8')
+
+        # First call fails, second call succeeds
+        mock_urlopen.side_effect = [Exception("Network error"), MagicMock(__enter__=MagicMock(return_value=mock_response))]
+
+        # Test batching over 100 packages (2 requests)
+        pkgs = [f"pkg{i}" for i in range(100)]
+        results = update_mkvpkg_aur.query_aur(pkgs)
+
+        self.assertEqual(results, {"pkg55": "2.0"})
+        self.assertEqual(mock_urlopen.call_count, 2)
+        mock_print.assert_any_call("Error querying AUR for batch: Network error")
 
     @patch('update_mkvpkg_aur.subprocess.run')
     @patch('update_mkvpkg_aur.subprocess.check_output')
