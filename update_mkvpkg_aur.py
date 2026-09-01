@@ -9,6 +9,8 @@ import sys
 db_path = os.environ.get("PARU_WRAPPER_REPO_DB", "")
 projects_dir = os.environ.get("PARU_WRAPPER_PROJECTS_DIR", "")
 repo_name = os.environ.get("PARU_WRAPPER_REPO", "")
+auto_update_installed_env = os.environ.get("PARU_WRAPPER_AUTO_UPDATE_INSTALLED", "true").lower()
+auto_update_installed = auto_update_installed_env in ("true", "1", "yes", "on")
 
 def run_cmd(cmd):
     try:
@@ -17,6 +19,13 @@ def run_cmd(cmd):
         return ""
     except Exception:
         return ""
+
+def is_installed(pkg):
+    try:
+        res = subprocess.run(["pacman", "-Qq", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) # nosec
+        return res.returncode == 0
+    except Exception:
+        return False
 
 def get_mkvpkg_packages_and_versions():
     """
@@ -90,8 +99,15 @@ def main():
             try:
                 res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip()) # nosec
                 if res > 0:
-                    print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from {repo_name} to trigger upgrade...")
-                    pkgs_to_remove.append(pkg)
+                    if is_installed(pkg):
+                        if auto_update_installed:
+                            print(f"[paru-wrapper] Newer version {aur_ver} of installed package '{pkg}' found in AUR (local repo has {local_ver}). Auto-upgrading installation...")
+                            pkgs_to_remove.append(pkg)
+                        else:
+                            print(f"[paru-wrapper] Newer version {aur_ver} of installed package '{pkg}' found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade.")
+                    else:
+                        print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from {repo_name} to trigger upgrade...")
+                        pkgs_to_remove.append(pkg)
             except Exception as e:
                 sys.stderr.write(f"Error comparing version for {pkg}: {e}\n")
 

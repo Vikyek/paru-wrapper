@@ -15,6 +15,7 @@ PARU_WRAPPER_REPO=""
 PARU_WRAPPER_REPO_DB=""
 PARU_WRAPPER_PROJECTS_DIR=""
 PARU_WRAPPER_DRY_RUN="false"
+PARU_WRAPPER_AUTO_UPDATE_INSTALLED="true"
 
 # Load configurations
 if [ -f "/etc/paru-wrapper.conf" ]; then
@@ -30,6 +31,7 @@ PARU_WRAPPER_REPO="${PARU_WRAPPER_REPO:-/mnt/v/Data/makepkg/packages}"
 PARU_WRAPPER_REPO_DB="${PARU_WRAPPER_REPO_DB:-${PARU_WRAPPER_REPO}/MKVPKG.db.tar.gz}"
 PARU_WRAPPER_PROJECTS_DIR="${PARU_WRAPPER_PROJECTS_DIR:-${HOME:-/root}/Projects}"
 PARU_WRAPPER_DRY_RUN="${PARU_WRAPPER_DRY_RUN:-false}"
+PARU_WRAPPER_AUTO_UPDATE_INSTALLED="${PARU_WRAPPER_AUTO_UPDATE_INSTALLED:-true}"
 
 # Handle initialization commands
 if [ "${1:-}" = "--init-repo" ]; then
@@ -240,7 +242,7 @@ if [ "$is_transaction" = true ]; then
 
     # Prune outdated unmodified packages from custom repo using helper script to trigger upgrades from AUR
     if [ -n "$PARU_WRAPPER_REPO" ]; then
-        export PARU_WRAPPER_REPO PARU_WRAPPER_REPO_DB PARU_WRAPPER_PROJECTS_DIR
+        export PARU_WRAPPER_REPO PARU_WRAPPER_REPO_DB PARU_WRAPPER_PROJECTS_DIR PARU_WRAPPER_AUTO_UPDATE_INSTALLED
         aur_updater=()
         if [ -x "/usr/bin/update_mkvpkg_aur.py" ]; then
             aur_updater=("/usr/bin/update_mkvpkg_aur.py")

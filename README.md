@@ -39,6 +39,7 @@ The wrapper makes several path assumptions by default. These can be configured w
 - PARU_WRAPPER_REPO_DB — repository database path (default: $PARU_WRAPPER_REPO/MKVPKG.db.tar.gz)
 - PARU_WRAPPER_PROJECTS_DIR — directory with local package sources (default: $HOME/Projects)
 - PARU_WRAPPER_DRY_RUN — if "true", the wrapper will not perform destructive changes
+- PARU_WRAPPER_AUTO_UPDATE_INSTALLED — if "true" (default), automatically upgrades installed packages when repository sync detects newer versions
 
 Example:
 ```bash
