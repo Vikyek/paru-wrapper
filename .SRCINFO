@@ -13,6 +13,7 @@ pkgbase = paru-wrapper
 	depends = jq
 	depends = curl
 	depends = git
+	depends = pacman-contrib
 	source = paru-wrapper
 	source = update_mkvpkg_aur.py
 	source = pacman-wrapper
