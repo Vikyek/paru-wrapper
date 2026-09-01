@@ -88,6 +88,67 @@ def query_aur(packages):
             raise RuntimeError(f"Error querying AUR for batch: {e}") from e
     return results
 
+def arch_vercmp(a, b):
+    def split_ver(v):
+        if not v: return "0", "", "0"
+        epoch, pkgrel = "0", "0"
+        colon_idx = v.find(':')
+        if colon_idx != -1:
+            epoch, v = v[:colon_idx], v[colon_idx+1:]
+        dash_idx = v.rfind('-')
+        if dash_idx != -1:
+            v, pkgrel = v[:dash_idx], v[dash_idx+1:]
+        return epoch, v, pkgrel
+
+    e1, v1, r1 = split_ver(a)
+    e2, v2, r2 = split_ver(b)
+
+    def rpmvercmp(a, b):
+        ptr1, ptr2 = 0, 0
+        len1, len2 = len(a), len(b)
+
+        while ptr1 < len1 or ptr2 < len2:
+            while ptr1 < len1 and not a[ptr1].isalnum(): ptr1 += 1
+            while ptr2 < len2 and not b[ptr2].isalnum(): ptr2 += 1
+
+            if ptr1 == len1 and ptr2 == len2: return 0
+            if ptr1 == len1: return -1
+            if ptr2 == len2: return 1
+
+            isnum = a[ptr1].isdigit()
+            if isnum:
+                end1 = ptr1
+                while end1 < len1 and a[end1].isdigit(): end1 += 1
+                end2 = ptr2
+                while end2 < len2 and b[end2].isdigit(): end2 += 1
+            else:
+                end1 = ptr1
+                while end1 < len1 and a[end1].isalpha(): end1 += 1
+                end2 = ptr2
+                while end2 < len2 and b[end2].isalpha(): end2 += 1
+
+            str1, str2 = a[ptr1:end1], b[ptr2:end2]
+
+            if isnum and not b[ptr2].isdigit(): return 1
+            if not isnum and b[ptr2].isdigit(): return -1
+
+            if isnum:
+                str1, str2 = str1.lstrip('0'), str2.lstrip('0')
+                if len(str1) > len(str2): return 1
+                if len(str2) > len(str1): return -1
+
+            if str1 > str2: return 1
+            if str1 < str2: return -1
+
+            ptr1, ptr2 = end1, end2
+
+        return 0
+
+    for x, y in ((e1, e2), (v1, v2), (r1, r2)):
+        res = rpmvercmp(x, y)
+        if res != 0: return res
+    return 0
+
 def main():
     use_color = not os.environ.get("NO_COLOR") and sys.stderr.isatty()
     c_info = "\033[1;34m" if use_color else ""
@@ -120,37 +181,16 @@ def main():
     aur_versions = query_aur(unmodified_pkgs)
     pkgs_to_remove = []
 
-    # Optimization: Batch vercmp calls to avoid N subprocess overhead
-    batch_args = []
-    batch_pkgs = []
     for pkg in unmodified_pkgs:
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
             if aur_ver == local_ver:
                 continue
-            batch_args.extend([aur_ver, local_ver])
-            batch_pkgs.append((pkg, aur_ver, local_ver))
 
-    if batch_args:
-        script = 'for ((i=1; i<=$#; i+=2)); do j=$((i+1)); vercmp "${!i}" "${!j}" || echo 0; done'
-        results = []
-        for i in range(0, len(batch_args), 300):
-            chunk = batch_args[i:i+300]
-            try:
-                output = subprocess.check_output(["bash", "-c", script, "--"] + chunk, text=True).strip().splitlines() # nosec
-                for x in output:
-                    try:
-                        results.append(int(x))
-                    except ValueError:
-                        results.append(0)
-            except Exception as e:
-                sys.stderr.write(f"{c_error}✖ Error{c_reset} in batch version comparison subprocess: {e}\n")
-                results.extend([0] * (len(chunk) // 2))
+            res = arch_vercmp(aur_ver, local_ver)
 
-        for idx, res in enumerate(results):
             if res > 0:
-                pkg, aur_ver, local_ver = batch_pkgs[idx]
                 if is_installed(pkg):
                     if auto_update_installed:
                         sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
