@@ -13,7 +13,7 @@ source=(
     "pacman-wrapper"
 )
 sha256sums=('98fb8de38a2157cce160b1917c5f1a413888a063f4e219ebdcc6a361e8f2a9e8'
-            '97db87eb16d63c68dc3e1ef3a523e7956679bd7f496383177e133953ae7b04fb'
+            '7b0a564a387c6aef38641e5e7b22a4899da9694989ea0ddb98cb6ec570d2c4e6'
             '502cfb8c5338c36d20fadfb02838f2d82ee41b3c4bdecb69251098cc42171aa6')
 
 package() {
