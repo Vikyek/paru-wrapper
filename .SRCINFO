@@ -12,8 +12,8 @@ pkgbase = paru-wrapper
 	source = paru-wrapper
 	source = update_mkvpkg_aur.py
 	source = pacman-wrapper
-	sha256sums = SKIP
-	sha256sums = SKIP
-	sha256sums = SKIP
+	sha256sums = a1d6049dd6f2a783cd6c0732b9fb8047359d893bdb7a2e2f6431392427ac9c0a
+	sha256sums = db193efd8fc83f936451bd984a39430417d37703e6be96c26eb7bb377ca5283f
+	sha256sums = 502cfb8c5338c36d20fadfb02838f2d82ee41b3c4bdecb69251098cc42171aa6
 
 pkgname = paru-wrapper
