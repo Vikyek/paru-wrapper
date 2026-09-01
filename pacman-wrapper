@@ -35,11 +35,10 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
         if [ "$total" -gt 0 ]; then
             completed=$((completed + 1))
 
-            # Secure atomic write to prevent TOCTOU symlink overwrite attacks
-            tmp_file=$(mktemp "$CACHE_DIR/paru_completed_packages.XXXXXX" 2>/dev/null || true)
-            if [ -n "$tmp_file" ]; then
-                echo "$completed" > "$tmp_file"
-                mv -fT "$tmp_file" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
+            if [ -n "${SUDO_USER:-}" ]; then
+                echo "$completed" | sudo -u "$SUDO_USER" tee "$CACHE_DIR/paru_completed_packages" >/dev/null 2>&1 || true
+            elif [ ! -L "$CACHE_DIR/paru_completed_packages" ]; then
+                echo "$completed" > "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
             fi
 
             percent=$((completed * 100 / total))
