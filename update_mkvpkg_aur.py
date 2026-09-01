@@ -63,8 +63,6 @@ def alpm_vercmp(a: str, b: str) -> int:
 
             if i1 >= len(a) and i2 >= len(b): break
 
-            if (i1 - ptr1) != (i2 - ptr2):
-                return -1 if (i1 - ptr1) < (i2 - ptr2) else 1
 
             if i1 >= len(a) or i2 >= len(b): break
 
