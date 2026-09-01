@@ -85,7 +85,7 @@ def query_aur(packages):
                 for res in data.get('results', []):
                     results[res['Name']] = res['Version']
         except Exception as e:
-            raise RuntimeError(f"Error querying AUR for batch: {e}") from e
+            sys.stderr.write(f"Error querying AUR for batch: {e}\n")
     return results
 
 def main():
