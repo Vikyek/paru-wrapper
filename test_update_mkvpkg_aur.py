@@ -20,6 +20,12 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         result = update_mkvpkg_aur.run_cmd(["cmd"])
         self.assertEqual(result, "")
 
+    @patch('update_mkvpkg_aur.subprocess.check_output')
+    def test_run_cmd_general_exception(self, mock_check_output):
+        mock_check_output.side_effect = Exception("General error")
+        result = update_mkvpkg_aur.run_cmd(["cmd"])
+        self.assertEqual(result, "")
+
     @patch('update_mkvpkg_aur.subprocess.run')
     def test_is_installed_true(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0)
