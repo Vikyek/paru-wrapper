@@ -316,18 +316,6 @@ if [ "$is_transaction" = true ]; then
         fi
     done
 
-    # If --rebuild or --redownload is requested, purge stale prebuilt binaries from local repo
-    if [ "$is_rebuild_cmd" = true ] && [ ${#targets[@]} -gt 0 ]; then
-        export FORCE_REBUILD=1
-        REPO_DIR=$(dirname "$PARU_WRAPPER_REPO_DB")
-        for pkg in "${targets[@]}"; do
-            echo "[paru-wrapper] Rebuild requested for '$pkg'. Purging stale binaries from $PARU_WRAPPER_REPO..." >&2
-            rm -f "$REPO_DIR/$pkg-"*.pkg.tar.zst 2>/dev/null || true
-            repo-remove -w "$PARU_WRAPPER_REPO_DB" "$pkg" 2>/dev/null || true
-        done
-        sudo pacman -Sy >/dev/null 2>&1 || true
-    fi
-
     # Pre-cache official status for all packages using a single pacman invocation
     declare -A _official_pkgs_cache=()
     if [ ${#targets[@]} -gt 0 ]; then
