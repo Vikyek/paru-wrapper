@@ -10,6 +10,99 @@ import urllib.request
 import urllib.parse
 import json
 import sys
+import re
+
+def _parse_evr(evr):
+    epoch = "0"
+    version = evr
+    release = None
+
+    m_epoch = re.match(r'^(\d+):(.*)$', evr)
+    if m_epoch:
+        epoch = m_epoch.group(1)
+        version = m_epoch.group(2)
+
+    idx = version.rfind('-')
+    if idx != -1:
+        release = version[idx+1:]
+        version = version[:idx]
+
+    return epoch, version, release
+
+def _rpmvercmp(a, b):
+    if a == b: return 0
+
+    ptr1 = 0
+    ptr2 = 0
+
+    while ptr1 < len(a) and ptr2 < len(b):
+        start1 = ptr1
+        start2 = ptr2
+        while ptr1 < len(a) and not a[ptr1].isalnum(): ptr1 += 1
+        while ptr2 < len(b) and not b[ptr2].isalnum(): ptr2 += 1
+
+        if (ptr1 - start1) != (ptr2 - start2):
+            return -1 if (ptr1 - start1) < (ptr2 - start2) else 1
+
+        if ptr1 >= len(a) or ptr2 >= len(b): break
+
+        start1 = ptr1
+        start2 = ptr2
+
+        isnum = False
+        if a[ptr1].isdigit():
+            while ptr1 < len(a) and a[ptr1].isdigit(): ptr1 += 1
+            while ptr2 < len(b) and b[ptr2].isdigit(): ptr2 += 1
+            isnum = True
+        else:
+            while ptr1 < len(a) and a[ptr1].isalpha(): ptr1 += 1
+            while ptr2 < len(b) and b[ptr2].isalpha(): ptr2 += 1
+            isnum = False
+
+        seg1 = a[start1:ptr1]
+        seg2 = b[start2:ptr2]
+
+        if not seg1: return -1
+
+        if not seg2:
+            return 1 if isnum else -1
+
+        if isnum:
+            s1 = seg1.lstrip('0')
+            s2 = seg2.lstrip('0')
+            if len(s1) > len(s2): return 1
+            if len(s2) > len(s1): return -1
+            if s1 > s2: return 1
+            if s2 > s1: return -1
+        else:
+            if seg1 > seg2: return 1
+            if seg2 > seg1: return -1
+
+    if ptr1 >= len(a) and ptr2 >= len(b): return 0
+
+    is_a_empty = ptr1 >= len(a)
+    is_a_alpha = ptr1 < len(a) and a[ptr1].isalpha()
+    is_b_alpha = ptr2 < len(b) and b[ptr2].isalpha()
+
+    if (is_a_empty and not is_b_alpha) or is_a_alpha:
+        return -1
+    else:
+        return 1
+
+def alpm_vercmp(a, b):
+    if a == b: return 0
+    if not a: return -1
+    if not b: return 1
+
+    epoch1, ver1, rel1 = _parse_evr(a)
+    epoch2, ver2, rel2 = _parse_evr(b)
+
+    ret = _rpmvercmp(epoch1, epoch2)
+    if ret == 0:
+        ret = _rpmvercmp(ver1, ver2)
+        if ret == 0 and rel1 is not None and rel2 is not None:
+            ret = _rpmvercmp(rel1, rel2)
+    return ret
 
 db_path = os.environ.get("PARU_WRAPPER_REPO_DB", "")
 projects_dir = os.environ.get("PARU_WRAPPER_PROJECTS_DIR", "")
@@ -128,37 +221,16 @@ def main():
                 sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Installed VCS package '{c_bold}{pkg}-git{c_reset}' takes priority over non-git '{c_bold}{pkg}{c_reset}' in {repo_name}. Removing non-git package...\n")
                 pkgs_to_remove.append(pkg)
 
-    # Optimization: Batch vercmp calls to avoid N subprocess overhead
-    batch_args = []
-    batch_pkgs = []
+    # Optimization: Use pure Python alpm_vercmp to avoid subprocess overhead
     for pkg in unmodified_pkgs:
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
             if aur_ver == local_ver:
                 continue
-            batch_args.extend([aur_ver, local_ver])
-            batch_pkgs.append((pkg, aur_ver, local_ver))
 
-    if batch_args:
-        script = 'for ((i=1; i<=$#; i+=2)); do j=$((i+1)); vercmp "${!i}" "${!j}" || echo 0; done'
-        results = []
-        for i in range(0, len(batch_args), 300):
-            chunk = batch_args[i:i+300]
-            try:
-                output = subprocess.check_output(["bash", "-c", script, "--"] + chunk, text=True).strip().splitlines() # nosec
-                for x in output:
-                    try:
-                        results.append(int(x))
-                    except ValueError:
-                        results.append(0)
-            except Exception as e:
-                sys.stderr.write(f"{c_error}✖ Error{c_reset} in batch version comparison subprocess: {e}\n")
-                results.extend([0] * (len(chunk) // 2))
-
-        for idx, res in enumerate(results):
+            res = alpm_vercmp(aur_ver, local_ver)
             if res > 0:
-                pkg, aur_ver, local_ver = batch_pkgs[idx]
                 if is_installed(pkg):
                     if auto_update_installed:
                         sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
