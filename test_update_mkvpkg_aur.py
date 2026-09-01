@@ -79,11 +79,13 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         update_mkvpkg_aur.query_aur(pkgs)
         self.assertEqual(mock_urlopen.call_count, 2)
 
+    @patch('builtins.print')
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
-    def test_query_aur_failure(self, mock_urlopen):
+    def test_query_aur_failure(self, mock_urlopen, mock_print):
         mock_urlopen.side_effect = Exception("Network error")
-        with self.assertRaises(RuntimeError):
-            update_mkvpkg_aur.query_aur(["pkg1"])
+        result = update_mkvpkg_aur.query_aur(["pkg1"])
+        self.assertEqual(result, {})
+        mock_print.assert_called_once_with("Error querying AUR for batch: Network error")
 
     @patch('update_mkvpkg_aur.is_installed')
     @patch('update_mkvpkg_aur.subprocess.run')
