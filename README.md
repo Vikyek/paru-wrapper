@@ -90,3 +90,8 @@ Be careful: automatic removals are performed without interactive confirmation wh
 ## Contributing
 
 Please open issues/PRs to report bugs or improve configurability. The project prefers changes that avoid hard-coded user or path names; use environment variables instead.
+
+## License
+
+Distributed under the GNU General Public License v3.0 (GPL-3.0). See [LICENSE](LICENSE) for details.
+
