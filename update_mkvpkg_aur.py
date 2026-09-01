@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""
+Updates the custom local package repository by querying the Arch User Repository (AUR)
+and removing standard, unmodified AUR packages from the local DB when a newer version
+is available remotely. This triggers a rebuild/upgrade during the next paru sync.
+"""
 import subprocess
 import os
 import urllib.request
@@ -13,6 +18,13 @@ auto_update_installed_env = os.environ.get("PARU_WRAPPER_AUTO_UPDATE_INSTALLED",
 auto_update_installed = auto_update_installed_env in ("true", "1", "yes", "on")
 
 def run_cmd(cmd):
+    """
+    Executes an executable with its arguments and returns its standard output.
+    Silently catches execution and process errors, returning an empty string on failure.
+
+    @param cmd - List of command arguments (e.g., ['pacman', '-Sl', 'repo'])
+    @returns Stripped standard output string, or an empty string if it fails
+    """
     try:
         return subprocess.check_output(cmd, text=True).strip() # nosec
     except subprocess.CalledProcessError:
@@ -46,6 +58,12 @@ def get_mkvpkg_packages_and_versions():
     return packages
 
 def query_aur(packages):
+    """
+    Resolves the AUR package metadata in batched chunks to prevent URL length limits.
+
+    @param packages - List of package names to query
+    @returns Dictionary of package names to version strings
+    """
     results = {}
     for i in range(0, len(packages), 50):
         batch = packages[i:i+50]
@@ -99,14 +117,17 @@ def main():
             try:
                 res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip()) # nosec
                 if res > 0:
+                    c_info = "" if os.environ.get("NO_COLOR") else "\033[1;34m"
+                    c_reset = "" if os.environ.get("NO_COLOR") else "\033[0m"
+                    c_bold = "" if os.environ.get("NO_COLOR") else "\033[1m"
                     if is_installed(pkg):
                         if auto_update_installed:
-                            print(f"[paru-wrapper] Newer version {aur_ver} of installed package '{pkg}' found in AUR (local repo has {local_ver}). Auto-upgrading installation...")
+                            sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
                             pkgs_to_remove.append(pkg)
                         else:
-                            print(f"[paru-wrapper] Newer version {aur_ver} of installed package '{pkg}' found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade.")
+                            sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade.\n")
                     else:
-                        print(f"[paru-wrapper] Newer version {aur_ver} of public package '{pkg}' found in AUR (local repo has {local_ver}). Removing from {repo_name} to trigger upgrade...")
+                        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of public package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade...\n")
                         pkgs_to_remove.append(pkg)
             except Exception as e:
                 sys.stderr.write(f"Error comparing version for {pkg}: {e}\n")
