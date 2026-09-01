@@ -93,5 +93,5 @@ Please open issues/PRs to report bugs or improve configurability. The project pr
 
 ## License
 
-Distributed under the GNU General Public License v3.0 (GPL-3.0). See [`LICENSE`](file:///home/v/Projects/paru-wrapper/LICENSE) for details.
+Distributed under the GNU General Public License v3.0 (GPL-3.0). See [LICENSE](LICENSE) for details.
 
