@@ -19,7 +19,7 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
-          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Import GPG Key
         id: import-gpg
@@ -41,4 +41,4 @@ jobs:
           git rebase --exec "git commit --amend --no-edit -S --allow-empty" $BASE_SHA
 
           # Push re-signed commits back to Jules' PR branch
-          git push --force-with-lease https://x-access-token:${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:${{ github.head_ref }} || true
+          git push --force-with-lease origin HEAD:${{ github.head_ref }} || true
