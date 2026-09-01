@@ -120,6 +120,14 @@ def main():
     aur_versions = query_aur(unmodified_pkgs)
     pkgs_to_remove = []
 
+    # Priority Check: If a non-git package exists in repo but a -git variant is installed,
+    # auto-remove the non-git package to prevent conflicts and prioritize VCS versions.
+    for pkg in unmodified_pkgs:
+        if not pkg.endswith("-git"):
+            if is_installed(f"{pkg}-git"):
+                sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Installed VCS package '{c_bold}{pkg}-git{c_reset}' takes priority over non-git '{c_bold}{pkg}{c_reset}' in {repo_name}. Removing non-git package...\n")
+                pkgs_to_remove.append(pkg)
+
     # Optimization: Batch vercmp calls to avoid N subprocess overhead
     batch_args = []
     batch_pkgs = []
