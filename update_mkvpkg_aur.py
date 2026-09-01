@@ -63,6 +63,55 @@ def get_mkvpkg_packages_and_versions():
                 packages[parts[1]] = parts[2]
     return packages
 
+def parse_evr(evr: str):
+    if not evr: return "0", "", ""
+    epoch, epoch_idx = "0", 0
+    while epoch_idx < len(evr) and evr[epoch_idx].isdigit(): epoch_idx += 1
+    if epoch_idx < len(evr) and evr[epoch_idx] == ':':
+        epoch = evr[:epoch_idx]
+        if not epoch: epoch = "0"
+        evr = evr[epoch_idx + 1:]
+    rel_idx = evr.rfind('-')
+    if rel_idx != -1:
+        return epoch, evr[:rel_idx], evr[rel_idx + 1:]
+    return epoch, evr, ""
+
+def rpmvercmp(a: str, b: str) -> int:
+    if a == b: return 0
+    if not a: return -1
+    if not b: return 1
+    ptr_a = ptr_b = 0
+    while ptr_a < len(a) or ptr_b < len(b):
+        while ptr_a < len(a) and not a[ptr_a].isalnum(): ptr_a += 1
+        while ptr_b < len(b) and not b[ptr_b].isalnum(): ptr_b += 1
+        if ptr_a == len(a) and ptr_b == len(b): return 0
+        if ptr_a == len(a): return 1 if ptr_b < len(b) and b[ptr_b].isalpha() else -1
+        if ptr_b == len(b): return -1 if ptr_a < len(a) and a[ptr_a].isalpha() else 1
+        start_a = ptr_a
+        is_num_a = a[ptr_a].isdigit()
+        while ptr_a < len(a) and (a[ptr_a].isdigit() if is_num_a else a[ptr_a].isalpha()): ptr_a += 1
+        seg_a = a[start_a:ptr_a]
+        start_b = ptr_b
+        is_num_b = b[ptr_b].isdigit()
+        while ptr_b < len(b) and (b[ptr_b].isdigit() if is_num_b else b[ptr_b].isalpha()): ptr_b += 1
+        seg_b = b[start_b:ptr_b]
+        if is_num_a != is_num_b: return 1 if is_num_a else -1
+        if is_num_a:
+            seg_a, seg_b = seg_a.lstrip('0'), seg_b.lstrip('0')
+            if len(seg_a) != len(seg_b): return 1 if len(seg_a) > len(seg_b) else -1
+        if seg_a != seg_b: return 1 if seg_a > seg_b else -1
+    return 0
+
+def alpm_vercmp(a: str, b: str) -> int:
+    if a == b: return 0
+    ea, va, ra = parse_evr(a)
+    eb, vb, rb = parse_evr(b)
+    res = rpmvercmp(ea, eb)
+    if res != 0: return res
+    res = rpmvercmp(va, vb)
+    if res != 0: return res
+    return rpmvercmp(ra, rb)
+
 def query_aur(packages):
     """
     Resolves the AUR package metadata in batched chunks to prevent URL length limits.
@@ -128,37 +177,15 @@ def main():
                 sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Installed VCS package '{c_bold}{pkg}-git{c_reset}' takes priority over non-git '{c_bold}{pkg}{c_reset}' in {repo_name}. Removing non-git package...\n")
                 pkgs_to_remove.append(pkg)
 
-    # Optimization: Batch vercmp calls to avoid N subprocess overhead
-    batch_args = []
-    batch_pkgs = []
+    # Optimization: Use pure Python port of alpm_vercmp to avoid subprocess overhead entirely
     for pkg in unmodified_pkgs:
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
             if aur_ver == local_ver:
                 continue
-            batch_args.extend([aur_ver, local_ver])
-            batch_pkgs.append((pkg, aur_ver, local_ver))
-
-    if batch_args:
-        script = 'for ((i=1; i<=$#; i+=2)); do j=$((i+1)); vercmp "${!i}" "${!j}" || echo 0; done'
-        results = []
-        for i in range(0, len(batch_args), 300):
-            chunk = batch_args[i:i+300]
-            try:
-                output = subprocess.check_output(["bash", "-c", script, "--"] + chunk, text=True).strip().splitlines() # nosec
-                for x in output:
-                    try:
-                        results.append(int(x))
-                    except ValueError:
-                        results.append(0)
-            except Exception as e:
-                sys.stderr.write(f"{c_error}✖ Error{c_reset} in batch version comparison subprocess: {e}\n")
-                results.extend([0] * (len(chunk) // 2))
-
-        for idx, res in enumerate(results):
+            res = alpm_vercmp(aur_ver, local_ver)
             if res > 0:
-                pkg, aur_ver, local_ver = batch_pkgs[idx]
                 if is_installed(pkg):
                     if auto_update_installed:
                         sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
