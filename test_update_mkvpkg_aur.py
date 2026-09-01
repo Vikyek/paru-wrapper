@@ -107,6 +107,39 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         self.assertEqual(mock_urlopen.call_count, 2)
         mock_print.assert_any_call("Error querying AUR for batch: Network error")
 
+    @patch('update_mkvpkg_aur.urllib.request.urlopen')
+    def test_query_aur_multiple_success(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "results": [
+                {"Name": "pkg1", "Version": "1.1"},
+                {"Name": "pkg2", "Version": "2.2"}
+            ]
+        }).encode('utf-8')
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        expected = {"pkg1": "1.1", "pkg2": "2.2"}
+        self.assertEqual(update_mkvpkg_aur.query_aur(["pkg1", "pkg2"]), expected)
+
+    def test_query_aur_empty_packages(self):
+        self.assertEqual(update_mkvpkg_aur.query_aur([]), {})
+
+    @patch('update_mkvpkg_aur.urllib.request.urlopen')
+    def test_query_aur_missing_results(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"error": "not found"}'
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        self.assertEqual(update_mkvpkg_aur.query_aur(["pkg1"]), {})
+
+    @patch('update_mkvpkg_aur.urllib.request.urlopen')
+    def test_query_aur_invalid_json(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b"invalid json"
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        with self.assertRaises(RuntimeError) as context:
+            update_mkvpkg_aur.query_aur(["pkg1"])
+        self.assertIn("Error querying AUR", str(context.exception))
+
     @patch('update_mkvpkg_aur.subprocess.run')
     @patch('update_mkvpkg_aur.subprocess.check_output')
     @patch('update_mkvpkg_aur.query_aur')
