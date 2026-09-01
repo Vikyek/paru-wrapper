@@ -1,6 +1,6 @@
 # paru-wrapper
 
-A wrapper around `paru` that automates dependency-aware orphaned package cleaning and registers newly built packages directly into a local repository database (like `MKVPKG`).
+A wrapper around `paru` that automates dependency-aware orphaned package cleaning and registers newly built packages directly into a local repository database.
 
 ## Features
 
@@ -36,15 +36,15 @@ Or run the automated installation script:
 The wrapper makes several path assumptions by default. These can be configured with environment variables:
 
 - PARU_WRAPPER_REPO — directory where built packages are stored (default: /mnt/v/Data/makepkg/packages)
-- PARU_WRAPPER_REPO_DB — repository database path (default: $PARU_WRAPPER_REPO/MKVPKG.db.tar.gz)
-- PARU_WRAPPER_PROJECTS_DIR — directory with local package sources (default: $HOME/Projects)
+- PARU_WRAPPER_REPO_DB — repository database path (default: $PARU_WRAPPER_REPO/custom.db.tar.gz)
+- PARU_WRAPPER_PROJECTS_DIR — directory with local package sources (default: $HOME/src)
 - PARU_WRAPPER_DRY_RUN — if "true", the wrapper will not perform destructive changes
 - PARU_WRAPPER_AUTO_UPDATE_INSTALLED — if "true" (default), automatically upgrades installed packages when repository sync detects newer versions
 
 Example:
 ```bash
 export PARU_WRAPPER_REPO=/var/cache/makepkg/packages
-export PARU_WRAPPER_PROJECTS_DIR="$HOME/Projects"
+export PARU_WRAPPER_PROJECTS_DIR="$HOME/src"
 /usr/bin/paru-wrapper --dry-run -Syu
 ```
 
