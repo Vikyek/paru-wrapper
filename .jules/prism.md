@@ -6,3 +6,6 @@
 **Learning:** When converting standard `print()` statements to `sys.stderr.write()` for better stdout/stderr separation in CLI tools, the `\n` newline character must be manually appended to the string format, as `sys.stderr.write` does not automatically append newlines like `print()` does.
 
 **Action:** Always append `\n` when rewriting Python `print` lines to use `sys.stderr.write`.
+## 2026-09-01 - Conditionally formatting ANSI colors in Python scripts
+**Learning:** Raw ANSI escape codes emitted to `stderr` or `stdout` can corrupt pipelines and logs for automated tools and CI systems if they are not disabled properly.
+**Action:** When adding semantic colors to Python scripts, conditionally apply them by checking both `os.environ.get("NO_COLOR")` and `sys.stderr.isatty()` (or `sys.stdout.isatty()`) to ensure machine-readability is preserved.

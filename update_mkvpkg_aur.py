@@ -89,6 +89,13 @@ def query_aur(packages):
     return results
 
 def main():
+    use_color = not os.environ.get("NO_COLOR") and sys.stderr.isatty()
+    c_info = "\033[1;34m" if use_color else ""
+    c_warn = "\033[1;33m" if use_color else ""
+    c_error = "\033[1;31m" if use_color else ""
+    c_reset = "\033[0m" if use_color else ""
+    c_bold = "\033[1m" if use_color else ""
+
     db_changed = False
     if not db_path or not projects_dir or not repo_name:
         return
@@ -138,15 +145,12 @@ def main():
                     except ValueError:
                         results.append(0)
             except Exception as e:
-                sys.stderr.write(f"Error in batch version comparison subprocess: {e}\n")
+                sys.stderr.write(f"{c_error}✖ Error{c_reset} in batch version comparison subprocess: {e}\n")
                 results.extend([0] * (len(chunk) // 2))
 
         for idx, res in enumerate(results):
             if res > 0:
                 pkg, aur_ver, local_ver = batch_pkgs[idx]
-                c_info = "" if os.environ.get("NO_COLOR") else "\033[1;34m"
-                c_reset = "" if os.environ.get("NO_COLOR") else "\033[0m"
-                c_bold = "" if os.environ.get("NO_COLOR") else "\033[1m"
                 if is_installed(pkg):
                     if auto_update_installed:
                         sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
@@ -165,13 +169,13 @@ def main():
                 subprocess.run(["repo-remove", "-w", "--", db_path] + batch, check=True) # nosec
                 db_changed = True
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            sys.stderr.write(f"[update_mkvpkg_aur] Warning: Failed to run repo-remove: {e}\n")
+            sys.stderr.write(f"{c_warn}⚠ [update_mkvpkg_aur] Warning:{c_reset} Failed to run repo-remove: {e}\n")
 
     if db_changed:
         try:
             subprocess.run(["sudo", "pacman", "-Sy"], check=True) # nosec
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            sys.stderr.write(f"[update_mkvpkg_aur] Warning: Failed to sync database (pacman -Sy): {e}\n")
+            sys.stderr.write(f"{c_warn}⚠ [update_mkvpkg_aur] Warning:{c_reset} Failed to sync database (pacman -Sy): {e}\n")
 
 if __name__ == "__main__":
     main()
