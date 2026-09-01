@@ -2,6 +2,7 @@
 import subprocess
 import os
 import urllib.request
+import urllib.parse
 import json
 import sys
 
@@ -39,8 +40,11 @@ def query_aur(packages):
     results = {}
     for i in range(0, len(packages), 50):
         batch = packages[i:i+50]
-        params = "&".join(f"arg[]={pkg}" for pkg in batch)
-        url = f"https://aur.archlinux.org/rpc/?v=5&type=info&{params}"
+        query_args = [('v', '5'), ('type', 'info')]
+        for pkg in batch:
+            query_args.append(('arg[]', pkg))
+        params = urllib.parse.urlencode(query_args)
+        url = f"https://aur.archlinux.org/rpc/?{params}"
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'paru-wrapper-updater'})
             with urllib.request.urlopen(req, timeout=10) as response:
