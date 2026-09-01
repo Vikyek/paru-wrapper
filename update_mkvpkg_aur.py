@@ -17,7 +17,7 @@ repo_name = os.environ.get("PARU_WRAPPER_REPO", "")
 
 def run_cmd(cmd):
     """
-    Executes a shell command and returns its standard output.
+    Executes an executable with its arguments and returns its standard output.
     Silently catches execution and process errors, returning an empty string on failure.
 
     @param cmd - List of command arguments (e.g., ['pacman', '-Sl', 'repo'])
