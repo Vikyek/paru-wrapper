@@ -17,3 +17,7 @@
 ## 2023-10-24 - Dependency parsing bug with tr
 **Learning:** Using `tr -d '>=<0-9.'` to strip version operators out of package names is extremely dangerous because it corrupts any package that genuinely has numbers in its name (e.g. gcc11 -> gcc, lib32-glibc -> lib-glibc).
 **Action:** Use `sed 's/[<>=].*//'` or similar regex that stops exactly at the version operators to safely truncate package dependency strings.
+## 2024-09-01 - Optimizing process tree traversal in Bash
+
+**Learning:** When navigating process trees in bash scripts (e.g. going up the PPID chain), invoking `ps` and `tr` repeatedly in a while loop introduces substantial overhead because a new process is forked on every iteration.
+**Action:** Instead of `ps -o ppid= -p $pid`, read directly from `/proc/$pid/stat` using pure bash builtins (`read` and parameter expansion) to avoid any subprocess forks. For safety, extract PPID using parameter expansion `stat_tail="${stat_line##*)}"` to prevent spoofing from process names containing parentheses. This dramatically speeds up process tree traversal.
