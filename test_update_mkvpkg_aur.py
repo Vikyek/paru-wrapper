@@ -73,9 +73,9 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         update_mkvpkg_aur.query_aur(pkgs)
         self.assertEqual(mock_urlopen.call_count, 2)
 
-    @patch('sys.stderr.write')
+    @patch('builtins.print')
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
-    def test_query_aur_failure_continues(self, mock_urlopen, mock_stderr):
+    def test_query_aur_failure_continues(self, mock_urlopen, mock_print):
         mock_response = MagicMock()
         mock_response.read.return_value = json.dumps({
             "results": [{"Name": "pkg55", "Version": "2.0"}]
@@ -90,7 +90,7 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
         self.assertEqual(results, {"pkg55": "2.0"})
         self.assertEqual(mock_urlopen.call_count, 2)
-        mock_stderr.assert_any_call("Error querying AUR for batch: Network error\n")
+        mock_print.assert_any_call("Error querying AUR for batch: Network error")
 
     @patch('update_mkvpkg_aur.subprocess.run')
     @patch('update_mkvpkg_aur.subprocess.check_output')
