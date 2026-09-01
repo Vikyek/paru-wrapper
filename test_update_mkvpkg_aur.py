@@ -102,6 +102,8 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         # Mock vercmp output returning 1 for pkg1 (needs update) and 0 for pkg2 (same/older)
         mock_check_output.return_value = "1\n0\n"
         mock_run.return_value = MagicMock(returncode=0)
+        # Mock is_installed so pkg1 is installed, but pkg1-git and pkg2-git are not.
+        mock_is_installed.side_effect = lambda pkg: pkg == "pkg1"
 
         update_mkvpkg_aur.main()
 
