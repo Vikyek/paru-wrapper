@@ -20,6 +20,12 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         result = update_mkvpkg_aur.run_cmd(["cmd"])
         self.assertEqual(result, "")
 
+    @patch('update_mkvpkg_aur.subprocess.check_output')
+    def test_run_cmd_exception(self, mock_check_output):
+        mock_check_output.side_effect = Exception("General error")
+        result = update_mkvpkg_aur.run_cmd(["cmd"])
+        self.assertEqual(result, "")
+
     @patch('update_mkvpkg_aur.subprocess.run')
     def test_is_installed_true(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0)
@@ -79,6 +85,7 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             update_mkvpkg_aur.query_aur(["pkg1"])
 
+    @patch('update_mkvpkg_aur.is_installed')
     @patch('update_mkvpkg_aur.subprocess.run')
     @patch('update_mkvpkg_aur.subprocess.check_output')
     @patch('update_mkvpkg_aur.query_aur')
@@ -88,7 +95,8 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
     @patch('os.path.exists', return_value=True)
     @patch('os.path.isdir', return_value=False)
-    def test_main_batched_vercmp(self, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run):
+    def test_main_batched_vercmp(self, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run, mock_is_installed):
+        mock_is_installed.return_value = False
         mock_get_pkgs.return_value = {"pkg1": "1.0", "pkg2": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0", "pkg2": "2.0"}
         # Mock vercmp output returning 1 for pkg1 (needs update) and 0 for pkg2 (same/older)
