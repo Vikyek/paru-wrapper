@@ -113,30 +113,39 @@ def main():
     aur_versions = query_aur(unmodified_pkgs)
     pkgs_to_remove = []
 
+    pairs_to_compare = []
     for pkg in unmodified_pkgs:
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
-        if aur_ver and local_ver:
-            # Optimization: Early return to avoid slow subprocess spawn when versions match perfectly
-            if aur_ver == local_ver:
-                continue
+        if aur_ver and local_ver and aur_ver != local_ver:
+            pairs_to_compare.append((pkg, aur_ver, local_ver))
+
+    if pairs_to_compare:
+        script = 'for ((i=1; i<=$#; i+=2)); do vercmp "${@:i:1}" "${@:i+1:1}"; done'
+        for i in range(0, len(pairs_to_compare), 50):
+            batch = pairs_to_compare[i:i+50]
+            args = []
+            for _, a_v, l_v in batch:
+                args.extend([a_v, l_v])
             try:
-                res = int(subprocess.check_output(["vercmp", aur_ver, local_ver], text=True).strip()) # nosec
-                if res > 0:
-                    c_info = "" if os.environ.get("NO_COLOR") else "\033[1;34m"
-                    c_reset = "" if os.environ.get("NO_COLOR") else "\033[0m"
-                    c_bold = "" if os.environ.get("NO_COLOR") else "\033[1m"
-                    if is_installed(pkg):
-                        if auto_update_installed:
-                            sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
-                            pkgs_to_remove.append(pkg)
+                out = subprocess.check_output(["bash", "-c", script, "--"] + args, text=True) # nosec
+                results = [int(line) for line in out.strip().split('\n') if line.strip()]
+                for (pkg, aur_ver, local_ver), res in zip(batch, results):
+                    if res > 0:
+                        c_info = "" if os.environ.get("NO_COLOR") else "\033[1;34m"
+                        c_reset = "" if os.environ.get("NO_COLOR") else "\033[0m"
+                        c_bold = "" if os.environ.get("NO_COLOR") else "\033[1m"
+                        if is_installed(pkg):
+                            if auto_update_installed:
+                                sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
+                                pkgs_to_remove.append(pkg)
+                            else:
+                                sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade.\n")
                         else:
-                            sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade.\n")
-                    else:
-                        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of public package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade...\n")
-                        pkgs_to_remove.append(pkg)
+                            sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of public package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade...\n")
+                            pkgs_to_remove.append(pkg)
             except Exception as e:
-                sys.stderr.write(f"Error comparing version for {pkg}: {e}\n")
+                sys.stderr.write(f"Error comparing version batch: {e}\n")
 
     # Optimization: Batch repo-remove operations to reduce subprocess overhead
     if pkgs_to_remove:

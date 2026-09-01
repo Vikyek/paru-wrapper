@@ -25,3 +25,6 @@
 ## 2024-05-18 - Safe Batched Network Lookups in Bash
 **Learning:** When making multiple network queries to an API like the AUR RPC from Bash, doing so iteratively in a loop causes O(N) subprocess forks and network delays.
 **Action:** Extract the queries into a batch array, pass them to a dedicated helper function to chunk the requests, use `curl -G --data-urlencode` to fetch the metadata, parse it with `jq`, and cache the result in a global associative array `declare -gA` populated via process substitution (`< <(echo "$out")`). Lookups inside the iteration loop become O(1) cache queries (e.g., `[[ -n "${_cache["$pkg"]+x}" ]]`).
+## 2024-05-15 - [Batching vercmp Subprocess Calls]
+**Learning:** In Python scripts, invoking a subprocess inside a loop can be an O(N) performance bottleneck (e.g., ~2ms overhead per subprocess.run call).
+**Action:** Instead of invoking an external program (like pacman's `vercmp`) individually inside a loop, aggregate arguments into a batch and execute a single subprocess call (e.g. `bash -c '...'`) to dramatically reduce the system's process spawning overhead. Note to keep arguments chunked to avoid hitting ARG_MAX limit.
