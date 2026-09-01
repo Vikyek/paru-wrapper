@@ -331,20 +331,14 @@ if [ "$is_transaction" = true ]; then
     # Pre-cache official status for all target packages using a single pacman invocation
     declare -A _official_pkgs_cache=()
     if [ ${#targets[@]} -gt 0 ]; then
-        while read -r name repo; do
-            if [[ -n "$repo" ]] && [[ "$repo" != "$PARU_WRAPPER_REPO" ]]; then
-                _official_pkgs_cache["$name"]=1
-            fi
-        done < <(LC_ALL=C pacman -Si "${targets[@]}" 2>/dev/null | awk -F '[ \t]*:[ \t]*' '/^Repository/ {r=$2} /^Name/ {print $2, r}')
+        while read -r name; do
+            _official_pkgs_cache["$name"]=1
+        done < <(pacman -Sl 2>/dev/null | awk -v targets="${targets[*]}" -v custom_repo="$PARU_WRAPPER_REPO" 'BEGIN { split(targets, t, " "); for(i in t) tgts[t[i]]=1 } tgts[$2] && $1 != custom_repo { print $2 }' | sort -u)
     fi
 
     # Helper to check if package is in official repos
     is_official_pkg() {
-        local pkg="$1"
-        if [[ "${_official_pkgs_cache["$pkg"]:-}" == 1 ]]; then
-            return 0
-        fi
-        return 1
+        [[ "${_official_pkgs_cache["$1"]:-}" == 1 ]]
     }
 
     # Pre-fetch AUR metadata in batches
