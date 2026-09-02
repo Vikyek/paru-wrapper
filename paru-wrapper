@@ -223,7 +223,7 @@ if [ "$is_transaction" = true ]; then
         hooks_disabled=true
     fi
 
-    start_marker=$(mktemp)
+    start_marker=$(mktemp -t paru_start_marker.XXXXXX)
 
     cleanup_hooks() {
         # Restore pacman hooks
