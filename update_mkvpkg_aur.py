@@ -32,6 +32,97 @@ def run_cmd(cmd):
 
 _installed_cache = None
 
+def alpm_vercmp(a, b):
+    """
+    Pure Python port of Arch Linux ALPM vercmp logic.
+    """
+    if a == b: return 0
+    if not a: return -1
+    if not b: return 1
+
+    def parse_evr(evr):
+        epoch, version, release = "0", evr, None
+        s = 0
+        while s < len(evr) and evr[s].isdigit():
+            s += 1
+
+        if s < len(evr) and evr[s] == ':':
+            epoch = evr[:s]
+            if not epoch:
+                epoch = "0"
+            version = evr[s+1:]
+
+        se = version.rfind('-')
+        if se != -1:
+            release = version[se+1:]
+            version = version[:se]
+
+        return epoch, version, release
+
+    def rpmvercmp(v1, v2):
+        if v1 == v2: return 0
+
+        ptr1, ptr2 = 0, 0
+        len1, len2 = len(v1), len(v2)
+
+        while ptr1 < len1 and ptr2 < len2:
+            one, two = ptr1, ptr2
+
+            while one < len1 and not v1[one].isalnum(): one += 1
+            while two < len2 and not v2[two].isalnum(): two += 1
+
+            if one == len1 and two == len2: break
+
+            if (one - ptr1) != (two - ptr2):
+                return -1 if (one - ptr1) < (two - ptr2) else 1
+
+            ptr1, ptr2 = one, two
+
+            if ptr1 < len1 and v1[ptr1].isdigit():
+                isnum = True
+                while ptr1 < len1 and v1[ptr1].isdigit(): ptr1 += 1
+                while ptr2 < len2 and v2[ptr2].isdigit(): ptr2 += 1
+            else:
+                isnum = False
+                while ptr1 < len1 and v1[ptr1].isalpha(): ptr1 += 1
+                while ptr2 < len2 and v2[ptr2].isalpha(): ptr2 += 1
+
+            if one == ptr1:
+                return -1
+
+            if two == ptr2:
+                return 1 if isnum else -1
+
+            seg1 = v1[one:ptr1]
+            seg2 = v2[two:ptr2]
+
+            if isnum:
+                seg1_str = seg1.lstrip('0')
+                seg2_str = seg2.lstrip('0')
+                if len(seg1_str) > len(seg2_str): return 1
+                if len(seg2_str) > len(seg1_str): return -1
+
+            if seg1 != seg2:
+                return -1 if seg1 < seg2 else 1
+
+        if ptr1 == len1 and ptr2 == len2:
+            return 0
+
+        if ptr1 == len1:
+            return -1 if ptr2 < len2 and not v2[ptr2].isalpha() else 1
+        else:
+            return 1 if ptr1 < len1 and not v1[ptr1].isalpha() else -1
+
+    e1, v1, r1 = parse_evr(a)
+    e2, v2, r2 = parse_evr(b)
+
+    ret = rpmvercmp(e1, e2)
+    if ret == 0:
+        ret = rpmvercmp(v1, v2)
+        if ret == 0 and r1 and r2:
+            ret = rpmvercmp(r1, r2)
+    return ret
+
 def is_installed(pkg):
     """
     Checks if a given package is currently installed on the system.
@@ -103,7 +194,6 @@ def main():
     use_color = not os.environ.get("NO_COLOR") and sys.stderr.isatty()
     c_info = "\033[1;34m" if use_color else ""
     c_warn = "\033[1;33m" if use_color else ""
-    c_error = "\033[1;31m" if use_color else ""
     c_reset = "\033[0m" if use_color else ""
     c_bold = "\033[1m" if use_color else ""
 
@@ -139,37 +229,16 @@ def main():
                 sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Installed VCS package '{c_bold}{pkg}-git{c_reset}' takes priority over non-git '{c_bold}{pkg}{c_reset}' in {repo_name}. Removing non-git package...\n")
                 pkgs_to_remove.append(pkg)
 
-    # Optimization: Batch vercmp calls to avoid N subprocess overhead
-    batch_args = []
-    batch_pkgs = []
+    # Optimization: Use pure Python vercmp to avoid subprocess overhead
     for pkg in unmodified_pkgs:
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
             if aur_ver == local_ver:
                 continue
-            batch_args.extend([aur_ver, local_ver])
-            batch_pkgs.append((pkg, aur_ver, local_ver))
 
-    if batch_args:
-        script = 'for ((i=1; i<=$#; i+=2)); do j=$((i+1)); vercmp "${!i}" "${!j}" || echo 0; done'
-        results = []
-        for i in range(0, len(batch_args), 300):
-            chunk = batch_args[i:i+300]
-            try:
-                output = subprocess.check_output(["bash", "-c", script, "--"] + chunk, text=True).strip().splitlines() # nosec
-                for x in output:
-                    try:
-                        results.append(int(x))
-                    except ValueError:
-                        results.append(0)
-            except Exception as e:
-                sys.stderr.write(f"{c_error}✖ Error{c_reset} in batch version comparison subprocess: {e}\n")
-                results.extend([0] * (len(chunk) // 2))
-
-        for idx, res in enumerate(results):
+            res = alpm_vercmp(aur_ver, local_ver)
             if res > 0:
-                pkg, aur_ver, local_ver = batch_pkgs[idx]
                 if is_installed(pkg):
                     if auto_update_installed:
                         sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
