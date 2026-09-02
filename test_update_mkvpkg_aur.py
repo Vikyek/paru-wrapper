@@ -106,7 +106,7 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
     def test_query_aur_failure(self, mock_urlopen):
-        mock_urlopen.side_effect = Exception("Network error")
+        mock_urlopen.side_effect = update_mkvpkg_aur.urllib.error.URLError("Network error")
         with self.assertRaises(RuntimeError):
             update_mkvpkg_aur.query_aur(["pkg1"])
 

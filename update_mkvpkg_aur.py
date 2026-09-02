@@ -8,6 +8,7 @@ import subprocess
 import os
 import urllib.request
 import urllib.parse
+import urllib.error
 import json
 import sys
 
@@ -82,7 +83,7 @@ def query_aur(packages):
                 data = json.loads(response.read().decode('utf-8'))
                 for res in data.get('results', []):
                     results[res['Name']] = res['Version']
-        except Exception as e:
+        except (urllib.error.URLError, json.JSONDecodeError) as e:
             raise RuntimeError(f"Error querying AUR for batch: {e}") from e
     return results
 
