@@ -30,6 +30,8 @@ def run_cmd(cmd):
     except (subprocess.CalledProcessError, FileNotFoundError):
         return ""
 
+_installed_cache = None
+
 def is_installed(pkg):
     """
     Checks if a given package is currently installed on the system.
@@ -37,6 +39,17 @@ def is_installed(pkg):
     @param pkg - The name of the package to check
     @returns True if installed, False otherwise
     """
+    global _installed_cache
+    if _installed_cache is None:
+        try:
+            res = subprocess.run(["pacman", "-Qq"], capture_output=True, text=True, check=True) # nosec
+            _installed_cache = set(res.stdout.splitlines())
+        except Exception:
+            _installed_cache = set()
+
+    if _installed_cache:
+        return pkg in _installed_cache
+
     try:
         res = subprocess.run(["pacman", "-Qq", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) # nosec
         return res.returncode == 0
