@@ -37,6 +37,14 @@ fetch_aur_metadata_batch() {
     done
 }
 
+unmark_anneal() {
+    local pkg="$1"
+    if command -v anneal >/dev/null; then
+        echo "[paru-wrapper] Unmarking '$pkg' in anneal rebuild queue..." >&2
+        sudo anneal unmark "$pkg" 2>/dev/null || true
+    fi
+}
+
 # Initialize variables to avoid unbound variable errors
 PARU_WRAPPER_REPO=""
 PARU_WRAPPER_REPO_DB=""
@@ -373,10 +381,7 @@ if [ "$is_transaction" = true ]; then
                         echo "[paru-wrapper] DRY RUN: would run: (cd \"${PARU_WRAPPER_PROJECTS_DIR}/${pkg}\" && makepkg -sfi --noconfirm)" >&2
                     else
                         if (cd "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}" && makepkg -sfi --noconfirm); then
-                            if command -v anneal >/dev/null; then
-                                echo "[paru-wrapper] Unmarking '$pkg' in anneal rebuild queue..." >&2
-                                sudo anneal unmark "$pkg" 2>/dev/null || true
-                            fi
+                            unmark_anneal "$pkg"
                         fi
                     fi
                 else
@@ -391,10 +396,7 @@ if [ "$is_transaction" = true ]; then
                     build_dir=$(mktemp -d)
                     if git clone --depth 1 "https://aur.archlinux.org/$pkg.git" "$build_dir" 2>/dev/null; then
                         if (cd "$build_dir" && makepkg -sfi --noconfirm); then
-                            if command -v anneal >/dev/null; then
-                                echo "[paru-wrapper] Unmarking '$pkg' in anneal rebuild queue..." >&2
-                                sudo anneal unmark "$pkg" 2>/dev/null || true
-                            fi
+                            unmark_anneal "$pkg"
                         fi
                         rm -rf "$build_dir"
                     else
