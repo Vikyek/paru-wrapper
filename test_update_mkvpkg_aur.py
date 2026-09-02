@@ -7,6 +7,44 @@ import update_mkvpkg_aur
 
 class TestUpdateMkvpkgAur(unittest.TestCase):
 
+    def test_alpm_vercmp(self):
+        pairs = [
+            ("1.0", "1.0", 0),
+            ("1.0a", "1.0", -1),
+            ("1.0.a", "1.0", 1),
+            ("1.0a", "1.0.a", -1),
+            ("1.0", "1.0-1", 0),
+            ("1:1.0", "1.0", 1),
+            ("1:1.0-1", "1:1.0-2", -1),
+            ("1.0-2", "1.0-1", 1),
+            ("1.1", "1.0", 1),
+            ("1.0.1", "1.0", 1),
+            ("1.0", "1.0_1", -1),
+            ("1.0_1", "1.0-1", 1),
+            ("1.0-1", "1.0-1", 0),
+            ("1.0", "1.0.0", -1),
+            ("1.0.a", "1.0.alpha", -1),
+            ("1.0.alpha", "1.0.b", -1),
+            ("1.0.b", "1.0.beta", -1),
+            ("1.0.beta", "1.0.rc", -1),
+            ("1.0.rc", "1.0", 1),
+            ("1.0", "1.0.1", -1),
+            ("1.0-1", "1.0.1", -1)
+        ]
+        for a, b, expected in pairs:
+            self.assertEqual(update_mkvpkg_aur.alpm_vercmp(a, b), expected)
+            self.assertEqual(update_mkvpkg_aur.alpm_vercmp(b, a), -expected)
+
+        self.assertEqual(update_mkvpkg_aur.alpm_vercmp(None, None), 0)
+        self.assertEqual(update_mkvpkg_aur.alpm_vercmp(None, "1.0"), -1)
+        self.assertEqual(update_mkvpkg_aur.alpm_vercmp("1.0", None), 1)
+
+
+
+
+
+
+
     @patch('update_mkvpkg_aur.subprocess.check_output')
     def test_run_cmd_success(self, mock_check_output):
         mock_check_output.return_value = "output\n"
@@ -127,7 +165,6 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
     @patch('update_mkvpkg_aur.is_installed')
     @patch('update_mkvpkg_aur.subprocess.run')
-    @patch('update_mkvpkg_aur.subprocess.check_output')
     @patch('update_mkvpkg_aur.query_aur')
     @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
     @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
@@ -135,23 +172,14 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
     @patch('os.path.exists', return_value=True)
     @patch('os.path.isdir', return_value=False)
-    def test_main_batched_vercmp(self, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_check_output, mock_run, mock_is_installed):
+    def test_main_batched_vercmp(self, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_run, mock_is_installed):
         mock_is_installed.return_value = False
         mock_get_pkgs.return_value = {"pkg1": "1.0", "pkg2": "1.0"}
-        mock_query_aur.return_value = {"pkg1": "2.0", "pkg2": "2.0"}
-        mock_is_installed.return_value = False
-        # Mock vercmp output returning 1 for pkg1 (needs update) and 0 for pkg2 (same/older)
-        mock_check_output.return_value = "1\n0\n"
+        mock_query_aur.return_value = {"pkg1": "2.0", "pkg2": "1.0"}
         mock_run.return_value = MagicMock(returncode=0)
-        mock_is_installed.return_value = False
 
         update_mkvpkg_aur.main()
 
-        # Verify bash script was executed with chunked arguments
-        mock_check_output.assert_called_once()
-        cmd = mock_check_output.call_args[0][0]
-        self.assertEqual(cmd[0:3], ["bash", "-c", 'for ((i=1; i<=$#; i+=2)); do j=$((i+1)); vercmp "${!i}" "${!j}" || echo 0; done'])
-        self.assertEqual(cmd[4:], ["2.0", "1.0", "2.0", "1.0"])
         # Verify repo-remove was called only for pkg1
         mock_run.assert_any_call(["repo-remove", "-w", "--", "/fake/db.tar.gz", "pkg1"], check=True)
 
@@ -186,8 +214,7 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch('update_mkvpkg_aur.query_aur')
     @patch('update_mkvpkg_aur.is_installed')
     @patch('update_mkvpkg_aur.subprocess.run')
-    @patch('update_mkvpkg_aur.subprocess.check_output')
-    def test_main_priority_check_git(self, mock_check_output, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
+    def test_main_priority_check_git(self, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
         mock_get_pkgs.return_value = {"pkg1": "1.0"}
         mock_query_aur.return_value = {"pkg1": "1.0"} # no update
 
@@ -208,32 +235,8 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch('update_mkvpkg_aur.query_aur')
     @patch('update_mkvpkg_aur.is_installed')
     @patch('update_mkvpkg_aur.subprocess.run')
-    @patch('update_mkvpkg_aur.subprocess.check_output')
-    def test_main_vercmp_valueerror_and_exception(self, mock_check_output, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
-        # test ValueError in vercmp and Exception in batch
-        mock_get_pkgs.return_value = {"pkg1": "1.0", "pkg2": "1.0"}
-        mock_query_aur.return_value = {"pkg1": "2.0", "pkg2": "2.0"}
-        mock_is_installed.return_value = False
-
-        # First call raises Exception
-        mock_check_output.side_effect = Exception("Subprocess failed")
-
-        update_mkvpkg_aur.main()
-
-        # Exception caught, results list extended with 0s.
-        # So it shouldn't call repo-remove because all vercmp results are 0
-        mock_run.assert_not_called()
-
-        # Let's test ValueError
-        mock_check_output.side_effect = None
-        mock_check_output.return_value = "invalid_int\n1\n"
-
-        # Reset mock
-        mock_run.reset_mock()
-        update_mkvpkg_aur.main()
-
-        # pkg2 will have result=1, so repo-remove called for pkg2
-        mock_run.assert_any_call(["repo-remove", "-w", "--", "/fake/db.tar.gz", "pkg2"], check=True)
+    def test_main_vercmp_valueerror_and_exception(self, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
+        pass # Removed because pure python vercmp doesn't throw these exceptions
 
     @patch('update_mkvpkg_aur.db_path', '/fake/db.tar.gz')
     @patch('update_mkvpkg_aur.projects_dir', '/fake/projects')
@@ -244,15 +247,11 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch('update_mkvpkg_aur.query_aur')
     @patch('update_mkvpkg_aur.is_installed')
     @patch('update_mkvpkg_aur.subprocess.run')
-    @patch('update_mkvpkg_aur.subprocess.check_output')
-    def test_main_auto_update_installed_true(self, mock_check_output, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
+    def test_main_auto_update_installed_true(self, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
         update_mkvpkg_aur.auto_update_installed = True
         mock_get_pkgs.return_value = {"pkg1": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0"}
-
         mock_is_installed.side_effect = lambda pkg: pkg == "pkg1"
-
-        mock_check_output.return_value = "1\n"
 
         update_mkvpkg_aur.main()
 
@@ -269,15 +268,11 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch('update_mkvpkg_aur.query_aur')
     @patch('update_mkvpkg_aur.is_installed')
     @patch('update_mkvpkg_aur.subprocess.run')
-    @patch('update_mkvpkg_aur.subprocess.check_output')
-    def test_main_auto_update_installed_false(self, mock_check_output, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
+    def test_main_auto_update_installed_false(self, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
         update_mkvpkg_aur.auto_update_installed = False
         mock_get_pkgs.return_value = {"pkg1": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0"}
-
         mock_is_installed.side_effect = lambda pkg: pkg == "pkg1"
-
-        mock_check_output.return_value = "1\n"
 
         update_mkvpkg_aur.main()
 
@@ -294,13 +289,10 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch('update_mkvpkg_aur.query_aur')
     @patch('update_mkvpkg_aur.is_installed')
     @patch('update_mkvpkg_aur.subprocess.run')
-    @patch('update_mkvpkg_aur.subprocess.check_output')
-    def test_main_subprocess_exceptions(self, mock_check_output, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
+    def test_main_subprocess_exceptions(self, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
         mock_get_pkgs.return_value = {"pkg1": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0"}
         mock_is_installed.return_value = False
-
-        mock_check_output.return_value = "1\n"
 
         def run_side_effect(args, **kwargs):
             if args[0] == "repo-remove":
@@ -324,13 +316,10 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch('update_mkvpkg_aur.query_aur')
     @patch('update_mkvpkg_aur.is_installed')
     @patch('update_mkvpkg_aur.subprocess.run')
-    @patch('update_mkvpkg_aur.subprocess.check_output')
-    def test_main_subprocess_exceptions_sudo(self, mock_check_output, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
+    def test_main_subprocess_exceptions_sudo(self, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
         mock_get_pkgs.return_value = {"pkg1": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0"}
         mock_is_installed.return_value = False
-
-        mock_check_output.return_value = "1\n"
 
         def run_side_effect(args, **kwargs):
             if args[0] == "sudo":
@@ -351,19 +340,15 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch('update_mkvpkg_aur.query_aur')
     @patch('update_mkvpkg_aur.is_installed')
     @patch('update_mkvpkg_aur.subprocess.run')
-    @patch('update_mkvpkg_aur.subprocess.check_output')
-    def test_main_continue_when_aur_or_local_missing(self, mock_check_output, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
+    def test_main_continue_when_aur_or_local_missing(self, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
         # We test lines 139 (continue) where aur_ver or local_ver are None or match
         mock_get_pkgs.return_value = {"pkg1": "1.0", "pkg2": "2.0"}
         mock_query_aur.return_value = {"pkg1": "1.0"} # no update for pkg1
         mock_is_installed.return_value = False
 
-        # We shouldn't even call check_output
-        mock_check_output.return_value = ""
-
         update_mkvpkg_aur.main()
 
-        mock_check_output.assert_not_called()
+
         for call in mock_run.call_args_list:
             self.assertNotEqual(call[0][0][0], "repo-remove")
 
