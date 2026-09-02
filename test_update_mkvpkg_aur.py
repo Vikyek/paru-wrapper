@@ -22,8 +22,8 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         mock_check_output.assert_called_once_with(["cmd"], text=True)
 
     @patch('update_mkvpkg_aur.subprocess.check_output')
-    def test_run_cmd_exception(self, mock_check_output):
-        mock_check_output.side_effect = Exception("General error")
+    def test_run_cmd_file_not_found(self, mock_check_output):
+        mock_check_output.side_effect = FileNotFoundError("Command not found")
         result = update_mkvpkg_aur.run_cmd(["cmd"])
         self.assertEqual(result, "")
         mock_check_output.assert_called_once_with(["cmd"], text=True)
@@ -72,8 +72,8 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         mock_run_cmd.assert_called_once_with(["pacman", "-Sl", "testrepo"])
 
     @patch('update_mkvpkg_aur.subprocess.run')
-    def test_is_installed_exception(self, mock_run):
-        mock_run.side_effect = Exception("System error")
+    def test_is_installed_file_not_found(self, mock_run):
+        mock_run.side_effect = FileNotFoundError("Command not found")
         self.assertFalse(update_mkvpkg_aur.is_installed("pkg"))
 
     @patch('update_mkvpkg_aur.urllib.request.urlopen')

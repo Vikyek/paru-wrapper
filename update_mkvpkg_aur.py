@@ -27,7 +27,7 @@ def run_cmd(cmd):
     """
     try:
         return subprocess.check_output(cmd, text=True).strip() # nosec
-    except (subprocess.CalledProcessError, Exception):
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return ""
 
 def is_installed(pkg):
@@ -40,7 +40,7 @@ def is_installed(pkg):
     try:
         res = subprocess.run(["pacman", "-Qq", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) # nosec
         return res.returncode == 0
-    except Exception:
+    except FileNotFoundError:
         return False
 
 def get_mkvpkg_packages_and_versions():
