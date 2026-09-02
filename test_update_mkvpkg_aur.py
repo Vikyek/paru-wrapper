@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import subprocess
 import urllib.request
+import urllib.error
 import json
 import update_mkvpkg_aur
 
@@ -106,7 +107,7 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
     def test_query_aur_failure(self, mock_urlopen):
-        mock_urlopen.side_effect = Exception("Network error")
+        mock_urlopen.side_effect = urllib.error.URLError("Network error")
         with self.assertRaises(RuntimeError):
             update_mkvpkg_aur.query_aur(["pkg1"])
 
