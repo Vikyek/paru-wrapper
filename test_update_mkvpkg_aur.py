@@ -23,14 +23,14 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch('update_mkvpkg_aur.subprocess.check_output')
     def test_run_cmd_exception(self, mock_check_output):
         mock_check_output.side_effect = Exception("General error")
-        result = update_mkvpkg_aur.run_cmd(["cmd"])
-        self.assertEqual(result, "")
+        with self.assertRaises(Exception):
+            update_mkvpkg_aur.run_cmd(["cmd"])
 
     @patch('update_mkvpkg_aur.subprocess.run')
     def test_is_installed_true(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0)
         self.assertTrue(update_mkvpkg_aur.is_installed("pkg"))
-        mock_run.assert_called_once_with(["pacman", "-Qq", "pkg"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        mock_run.assert_called_once_with(["pacman", "-Qq", "pkg"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
 
     @patch('update_mkvpkg_aur.subprocess.run')
     def test_is_installed_false(self, mock_run):
@@ -81,7 +81,7 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
     def test_query_aur_failure(self, mock_urlopen):
-        mock_urlopen.side_effect = Exception("Network error")
+        mock_urlopen.side_effect = urllib.error.URLError("Network error")
         with self.assertRaises(RuntimeError):
             update_mkvpkg_aur.query_aur(["pkg1"])
 

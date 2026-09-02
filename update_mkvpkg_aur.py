@@ -27,9 +27,7 @@ def run_cmd(cmd):
     """
     try:
         return subprocess.check_output(cmd, text=True).strip() # nosec
-    except subprocess.CalledProcessError:
-        return ""
-    except Exception:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return ""
 
 def is_installed(pkg):
@@ -40,9 +38,9 @@ def is_installed(pkg):
     @returns True if installed, False otherwise
     """
     try:
-        res = subprocess.run(["pacman", "-Qq", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) # nosec
+        res = subprocess.run(["pacman", "-Qq", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False) # nosec
         return res.returncode == 0
-    except Exception:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return False
 
 def get_mkvpkg_packages_and_versions():
@@ -70,7 +68,7 @@ def query_aur(packages):
     @param packages - List of package names to query
     @returns Dictionary of package names to version strings
     """
-    results = {}
+    results = dict()
     for i in range(0, len(packages), 50):
         batch = packages[i:i+50]
         query_args = [('v', '5'), ('type', 'info')]
@@ -84,7 +82,7 @@ def query_aur(packages):
                 data = json.loads(response.read().decode('utf-8'))
                 for res in data.get('results', []):
                     results[res['Name']] = res['Version']
-        except Exception as e:
+        except (urllib.error.URLError, json.JSONDecodeError) as e:
             raise RuntimeError(f"Error querying AUR for batch: {e}") from e
     return results
 
@@ -152,7 +150,7 @@ def main():
                         results.append(int(x))
                     except ValueError:
                         results.append(0)
-            except Exception as e:
+            except (subprocess.CalledProcessError, ValueError) as e:
                 sys.stderr.write(f"{c_error}✖ Error{c_reset} in batch version comparison subprocess: {e}\n")
                 results.extend([0] * (len(chunk) // 2))
 
