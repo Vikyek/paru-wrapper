@@ -12,6 +12,12 @@ set -euo pipefail
 
 declare -gA _aur_pkgs_cache=()
 
+# Resolves the AUR package metadata in batched chunks.
+#
+# @param pkgs - List of package names to query
+# @param chunkSize - Maximum batch limit (default: 50)
+# @returns Map of package names to version strings
+# @throws {NetworkError} When the remote RPC endpoint cannot be reached
 fetch_aur_metadata_batch() {
     local pkgs=("$@")
     local chunk_size=50
