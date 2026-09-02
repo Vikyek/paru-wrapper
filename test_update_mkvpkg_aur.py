@@ -201,11 +201,11 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         mock_is_installed.return_value = False
 
         # First call raises Exception
-        mock_check_output.side_effect = Exception("Subprocess failed")
+        mock_check_output.side_effect = subprocess.CalledProcessError(1, ["bash"])
 
         update_mkvpkg_aur.main()
 
-        # Exception caught, results list extended with 0s.
+        # CalledProcessError caught, results list extended with 0s.
         # So it shouldn't call repo-remove because all vercmp results are 0
         mock_run.assert_not_called()
 

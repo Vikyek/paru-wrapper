@@ -150,7 +150,7 @@ def main():
                         results.append(int(x))
                     except ValueError:
                         results.append(0)
-            except Exception as e:
+            except (subprocess.CalledProcessError, ValueError) as e:
                 sys.stderr.write(f"{c_error}✖ Error{c_reset} in batch version comparison subprocess: {e}\n")
                 results.extend([0] * (len(chunk) // 2))
 
