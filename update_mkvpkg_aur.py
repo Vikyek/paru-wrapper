@@ -27,7 +27,7 @@ def run_cmd(cmd):
     """
     try:
         return subprocess.check_output(cmd, text=True).strip() # nosec
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return ""
 
 _installed_cache = None
