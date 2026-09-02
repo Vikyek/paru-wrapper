@@ -30,13 +30,21 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
     @patch('update_mkvpkg_aur.subprocess.run')
     def test_is_installed_true(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0)
+        update_mkvpkg_aur._installed_cache = None
+        # Mock successful bulk query
+        mock_res = MagicMock(returncode=0)
+        mock_res.stdout = "pkg\notherpkg\n"
+        mock_run.return_value = mock_res
         self.assertTrue(update_mkvpkg_aur.is_installed("pkg"))
-        mock_run.assert_called_once_with(["pacman", "-Qq", "pkg"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        mock_run.assert_called_once_with(["pacman", "-Qq"], capture_output=True, text=True, check=True)
 
     @patch('update_mkvpkg_aur.subprocess.run')
     def test_is_installed_false(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=1)
+        update_mkvpkg_aur._installed_cache = None
+        # Mock successful bulk query
+        mock_res = MagicMock(returncode=0)
+        mock_res.stdout = "otherpkg\nanotherpkg\n"
+        mock_run.return_value = mock_res
         self.assertFalse(update_mkvpkg_aur.is_installed("pkg"))
 
     @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
@@ -73,6 +81,7 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
     @patch('update_mkvpkg_aur.subprocess.run')
     def test_is_installed_exception(self, mock_run):
+        update_mkvpkg_aur._installed_cache = None
         mock_run.side_effect = Exception("System error")
         self.assertFalse(update_mkvpkg_aur.is_installed("pkg"))
 
