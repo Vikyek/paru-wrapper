@@ -49,10 +49,21 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
             bar_empty="--------------------"
             bar="[${bar_full:0:filled}${bar_empty:0:bar_len-filled}]"
 
-            if [ -z "${NO_COLOR:-}" ]; then
-                echo -e "\n\e[1;32m[paru-wrapper] Progress: $completed / $total packages completed ($percent%) $bar\e[0m\n" >&2
+            if [ -z "${NO_COLOR:-}" ] && [ -t 2 ]; then
+                c_prefix='\e[1;34m'
+                c_green='\e[1;32m'
+                c_gray='\e[1;30m'
+                c_reset='\e[0m'
+
+                # Use carriage return and clear to end of line to overwrite previous progress
+                echo -ne "\r\033[K${c_prefix}[paru-wrapper]${c_reset} Progress: ${c_green}${completed}${c_reset} / ${total} (${c_green}${percent}%${c_reset}) [${c_green}${bar_full:0:filled}${c_gray}${bar_empty:0:bar_len-filled}${c_reset}]" >&2
+
+                # Print final newline when complete
+                if [ "$completed" -eq "$total" ]; then
+                    echo "" >&2
+                fi
             else
-                echo -e "\n[paru-wrapper] Progress: $completed / $total packages completed ($percent%) $bar\n" >&2
+                echo "[paru-wrapper] Progress: $completed / $total packages completed ($percent%) $bar" >&2
             fi
         fi
     fi
