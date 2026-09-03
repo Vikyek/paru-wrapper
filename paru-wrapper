@@ -424,8 +424,13 @@ if [ "$is_transaction" = true ]; then
     # Write total packages to paru_total_packages for progress counter
     if [[ -n "$upgrades" ]]; then
         total_pkgs=$(echo "$upgrades" | grep -v "^$" | grep -c "")
-        echo "$total_pkgs" > "$CACHE_DIR/paru_total_packages"
-        echo "0" > "$CACHE_DIR/paru_completed_packages"
+        if [ -n "${SUDO_USER:-}" ]; then
+            echo "$total_pkgs" | sudo -u "$SUDO_USER" tee "$CACHE_DIR/paru_total_packages" >/dev/null 2>&1 || true
+            echo "0" | sudo -u "$SUDO_USER" tee "$CACHE_DIR/paru_completed_packages" >/dev/null 2>&1 || true
+        else
+            [ ! -L "$CACHE_DIR/paru_total_packages" ] && echo "$total_pkgs" > "$CACHE_DIR/paru_total_packages" 2>/dev/null || true
+            [ ! -L "$CACHE_DIR/paru_completed_packages" ] && echo "0" > "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
+        fi
     else
         rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
     fi
