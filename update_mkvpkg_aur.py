@@ -54,7 +54,6 @@ def rpmvercmp(a: str, b: str) -> int:
         if o1 == l1 and o2 == l2:
             p1, p2 = o1, o2
             break
-        if (o1 - p1) != (o2 - p2): return -1 if (o1 - p1) < (o2 - p2) else 1
         p1, p2 = o1, o2
         isnum = a[p1].isdigit() if p1 < l1 else False
         while p1 < l1 and (a[p1].isdigit() if isnum else a[p1].isalpha()): p1 += 1
