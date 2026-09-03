@@ -17,7 +17,7 @@ jobs:
           pacman -Syu --noconfirm git sudo namcap diffutils pacman-contrib
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup non-root builder
         run: |
@@ -80,7 +80,7 @@ jobs:
       contents: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
