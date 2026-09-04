@@ -30,6 +30,58 @@ def run_cmd(cmd):
     except (subprocess.SubprocessError, FileNotFoundError, OSError):
         return ""
 
+def parse_evr(evr: str):
+    s = 0
+    while s < len(evr) and evr[s].isdigit(): s += 1
+    se = evr.rfind('-')
+    if s < len(evr) and evr[s] == ':':
+        epoch = evr[:s] or "0"
+        version_start = s + 1
+    else:
+        epoch, version_start = "0", 0
+    if se != -1 and se >= version_start:
+        return epoch, evr[version_start:se], evr[se+1:]
+    return epoch, evr[version_start:], None
+
+def rpmvercmp(a: str, b: str) -> int:
+    a, b = str(a), str(b)
+    if a == b: return 0
+    p1, p2, l1, l2 = 0, 0, len(a), len(b)
+    while p1 < l1 and p2 < l2:
+        o1, o2 = p1, p2
+        while o1 < l1 and not a[o1].isalnum(): o1 += 1
+        while o2 < l2 and not b[o2].isalnum(): o2 += 1
+        if o1 == l1 and o2 == l2:
+            p1, p2 = o1, o2
+            break
+        if (o1 - p1) != (o2 - p2): return -1 if (o1 - p1) < (o2 - p2) else 1
+        p1, p2 = o1, o2
+        isnum = a[p1].isdigit() if p1 < l1 else False
+        while p1 < l1 and (a[p1].isdigit() if isnum else a[p1].isalpha()): p1 += 1
+        while p2 < l2 and (b[p2].isdigit() if isnum else b[p2].isalpha()): p2 += 1
+        if o1 == p1: return -1
+        if o2 == p2: return 1 if isnum else -1
+        s1, s2 = a[o1:p1], b[o2:p2]
+        if isnum:
+            s1, s2 = s1.lstrip('0'), s2.lstrip('0')
+            if len(s1) != len(s2): return 1 if len(s1) > len(s2) else -1
+        if s1 != s2: return -1 if s1 < s2 else 1
+    if p1 == l1 and p2 == l2: return 0
+    if (p1 == l1 and (p2 < l2 and not b[p2].isalpha())) or (p1 < l1 and a[p1].isalpha()): return -1
+    return 1
+
+def alpm_vercmp(a: str, b: str) -> int:
+    if a == b: return 0
+    if not a or not b: return -1 if not a else 1
+    e1, v1, r1 = parse_evr(a)
+    e2, v2, r2 = parse_evr(b)
+    ret = rpmvercmp(e1, e2)
+    if ret == 0:
+        ret = rpmvercmp(v1, v2)
+        if ret == 0 and r1 is not None and r2 is not None:
+            ret = rpmvercmp(r1, r2)
+    return ret
+
 _installed_cache = None
 
 def is_installed(pkg):
@@ -139,37 +191,20 @@ def main():
                 sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Installed VCS package '{c_bold}{pkg}-git{c_reset}' takes priority over non-git '{c_bold}{pkg}{c_reset}' in {repo_name}. Removing non-git package...\n")
                 pkgs_to_remove.append(pkg)
 
-    # Optimization: Batch vercmp calls to avoid N subprocess overhead
-    batch_args = []
-    batch_pkgs = []
+    # Optimization: Use pure-Python alpm_vercmp to avoid subprocess overhead entirely
     for pkg in unmodified_pkgs:
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
             if aur_ver == local_ver:
                 continue
-            batch_args.extend([aur_ver, local_ver])
-            batch_pkgs.append((pkg, aur_ver, local_ver))
-
-    if batch_args:
-        script = 'for ((i=1; i<=$#; i+=2)); do j=$((i+1)); vercmp "${!i}" "${!j}" || echo 0; done'
-        results = []
-        for i in range(0, len(batch_args), 300):
-            chunk = batch_args[i:i+300]
             try:
-                output = subprocess.check_output(["bash", "-c", script, "--"] + chunk, text=True).strip().splitlines() # nosec
-                for x in output:
-                    try:
-                        results.append(int(x))
-                    except ValueError:
-                        results.append(0)
+                res = alpm_vercmp(aur_ver, local_ver)
             except Exception as e:
-                sys.stderr.write(f"{c_error}✖ Error{c_reset} in batch version comparison subprocess: {e}\n")
-                results.extend([0] * (len(chunk) // 2))
+                sys.stderr.write(f"{c_error}✖ Error{c_reset} in version comparison for {pkg}: {e}\n")
+                res = 0
 
-        for idx, res in enumerate(results):
             if res > 0:
-                pkg, aur_ver, local_ver = batch_pkgs[idx]
                 if is_installed(pkg):
                     if auto_update_installed:
                         sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
