@@ -1,3 +1,3 @@
-## 2024-05-14 - Optimize is_installed
-**Learning:** Checking package installation status one-by-one with `pacman -Qq <pkg>` in Python causes significant N+1 subprocess overhead in Arch Linux wrapper scripts.
-**Action:** Always pre-fetch installed packages using a bulk `pacman -Qq` query, cache the results in a module-level Python `set`, and fall back to single queries only if the bulk query fails. This reduces complexity from O(N) subprocess forks to O(1) set lookups.
+## 2024-05-24 - Pure-Python Version Comparisons
+**Learning:** Shelling out to `vercmp` for N+1 package version comparisons using `bash -c` is a massive performance bottleneck. However, `pkg_resources` or `packaging.version` cannot be used to compare Arch Linux package versions since PEP 440 fundamentally disagrees with ALPM (e.g. `1.0a` evaluates as older than `1.0` in ALPM).
+**Action:** Always use a custom pure-Python port of Pacman's `alpm_vercmp` (and `rpmvercmp`) logic for Arch package comparisons in Python scripts.
