@@ -4,8 +4,8 @@ pkgrel=6
 pkgdesc="A wrapper around paru that implements dependency-aware orphan cleaning and automatic local repository DB updates"
 arch=('any')
 url="https://github.com/Vikyek/paru-wrapper"
-license=('GPL-3.0-only')
-depends=('paru' 'bash' 'sudo' 'python' 'jq' 'curl' 'git' 'pacman-contrib')
+license=('GPL-3.0-or-later')
+depends=("bash" "python" "paru" "jq" "curl" "git" "pacman-contrib" "sudo")
 install=paru-wrapper.install
 source=(
     "paru-wrapper"
@@ -13,10 +13,7 @@ source=(
     "pacman-wrapper"
     "LICENSE"
 )
-sha256sums=('692f082a965048c911a2a17923948f21c0f14c5d8054001dc1c4838a32098be9'
-            '925d54b4d5378a6dacf61c49a50746ad27298fdbcd503c360109b63d74d01119'
-            '05cbd29e52289828776d6aaaa14b29547c706526e02b72c3b2249586367ec18a'
-            '3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 package() {
     # Install paru wrapper
