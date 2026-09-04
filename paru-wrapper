@@ -231,6 +231,12 @@ if [ "$is_transaction" = true ]; then
 
     start_marker=$(mktemp -t paru_start_marker.XXXXXX)
 
+    # /**
+    #  * Restores disabled pacman hooks and removes temporary marker files.
+    #  * Used to clean up state after the paru transaction completes or fails.
+    #  *
+    #  * @returns None
+    #  */
     cleanup_hooks() {
         # Restore pacman hooks
         if [ "$hooks_disabled" = true ]; then
@@ -344,7 +350,12 @@ if [ "$is_transaction" = true ]; then
         done < <(LC_ALL=C pacman -Sl 2>/dev/null | awk -v targets="${targets[*]}" 'BEGIN { split(targets, t, " "); for(i in t) tgts[t[i]]=1 } tgts[$2] { print $1, $2, $3 }')
     fi
 
-    # Helper to check if package is in official repos
+    # /**
+    #  * Helper to check if a package is in the official repositories.
+    #  *
+    #  * @param pkg - The name of the package to check
+    #  * @returns 0 (true) if the package is in an official repo, 1 (false) otherwise
+    #  */
     is_official_pkg() {
         [[ "${_official_pkgs_cache["$1"]:-}" == 1 ]]
     }
