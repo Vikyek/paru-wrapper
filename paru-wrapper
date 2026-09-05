@@ -105,9 +105,9 @@ EOF
     mkdir -p "$CONFIG_DIR"
 
     cat << EOF > "$CONFIG_DIR/paru-wrapper.conf"
-PARU_WRAPPER_REPO="$REPO_NAME"
-PARU_WRAPPER_REPO_DB="$REPO_DB"
-PARU_WRAPPER_PROJECTS_DIR="$PROJ_DIR"
+PARU_WRAPPER_REPO=$(printf '%q' "$REPO_NAME")
+PARU_WRAPPER_REPO_DB=$(printf '%q' "$REPO_DB")
+PARU_WRAPPER_PROJECTS_DIR=$(printf '%q' "$PROJ_DIR")
 EOF
     echo "Configuration written to $CONFIG_DIR/paru-wrapper.conf"
     echo ""
@@ -135,9 +135,9 @@ if [ "${1:-}" = "--connect-repo" ]; then
     mkdir -p "$CONFIG_DIR"
 
     cat << EOF > "$CONFIG_DIR/paru-wrapper.conf"
-PARU_WRAPPER_REPO="$REPO_NAME"
-PARU_WRAPPER_REPO_DB="$REPO_DB"
-PARU_WRAPPER_PROJECTS_DIR="$PROJ_DIR"
+PARU_WRAPPER_REPO=$(printf '%q' "$REPO_NAME")
+PARU_WRAPPER_REPO_DB=$(printf '%q' "$REPO_DB")
+PARU_WRAPPER_PROJECTS_DIR=$(printf '%q' "$PROJ_DIR")
 EOF
     echo "Configuration written to $CONFIG_DIR/paru-wrapper.conf"
     echo ""
