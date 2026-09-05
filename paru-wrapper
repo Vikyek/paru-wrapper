@@ -344,7 +344,12 @@ if [ "$is_transaction" = true ]; then
         done < <(LC_ALL=C pacman -Sl 2>/dev/null | awk -v targets="${targets[*]}" 'BEGIN { split(targets, t, " "); for(i in t) tgts[t[i]]=1 } tgts[$2] { print $1, $2, $3 }')
     fi
 
-    # Helper to check if package is in official repos
+    # /**
+    #  * Helper to check if a package is in the official repos.
+    #  *
+    #  * @param $1 - The name of the package to check
+    #  * @returns 0 (true) if the package is in the official repos, 1 (false) otherwise
+    #  */
     is_official_pkg() {
         [[ "${_official_pkgs_cache["$1"]:-}" == 1 ]]
     }
