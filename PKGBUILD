@@ -1,4 +1,3 @@
-# Maintainer: Releaser <releaser@example.com>
 pkgname=paru-wrapper
 pkgver=1.0.0
 pkgrel=6
@@ -14,7 +13,7 @@ source=(
     "pacman-wrapper"
     "LICENSE"
 )
-sha256sums=('4f0535a59e8cb59f248e9970b138a361877163504d05da5061b49821d1970507'
+sha256sums=('383fbcd172864853dab9a2d9dc9f6041292ffa394da03087094611ba94992462'
             '1ffdbc8bd092e77a723677156b3b5444ed893f4ef976b9157127ff022986c1f3'
             'da96c114a193f1f000539c05a2a4f90655ea25296cba0d8947a87dee3822656b'
             '3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986')
