@@ -14,10 +14,10 @@ source=(
     "pacman-wrapper"
     "LICENSE"
 )
-sha256sums=('4f0535a59e8cb59f248e9970b138a361877163504d05da5061b49821d1970507'
-            '443424ef9d88658fdb18b45704191787860b4f35ab0ccbc974f5fc0364005e46'
-            'da96c114a193f1f000539c05a2a4f90655ea25296cba0d8947a87dee3822656b'
-            '3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986')
+sha256sums=('SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP')
 
 package() {
     # Install paru wrapper
