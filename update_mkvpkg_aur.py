@@ -32,7 +32,8 @@ def run_cmd(cmd):
 
 def parse_evr(evr: str):
     s = 0
-    while s < len(evr) and evr[s].isdigit(): s += 1
+    while s < len(evr) and evr[s].isdigit():
+        s += 1
     se = evr.rfind('-')
     if s < len(evr) and evr[s] == ':':
         epoch = evr[:s] or "0"
@@ -45,34 +46,48 @@ def parse_evr(evr: str):
 
 def rpmvercmp(a: str, b: str) -> int:
     a, b = str(a), str(b)
-    if a == b: return 0
+    if a == b:
+        return 0
     p1, p2, l1, l2 = 0, 0, len(a), len(b)
     while p1 < l1 and p2 < l2:
         o1, o2 = p1, p2
-        while o1 < l1 and not a[o1].isalnum(): o1 += 1
-        while o2 < l2 and not b[o2].isalnum(): o2 += 1
+        while o1 < l1 and not a[o1].isalnum():
+            o1 += 1
+        while o2 < l2 and not b[o2].isalnum():
+            o2 += 1
         if o1 == l1 and o2 == l2:
             p1, p2 = o1, o2
             break
-        if (o1 - p1) != (o2 - p2): return -1 if (o1 - p1) < (o2 - p2) else 1
+        if (o1 - p1) != (o2 - p2):
+            return -1 if (o1 - p1) < (o2 - p2) else 1
         p1, p2 = o1, o2
         isnum = a[p1].isdigit() if p1 < l1 else False
-        while p1 < l1 and (a[p1].isdigit() if isnum else a[p1].isalpha()): p1 += 1
-        while p2 < l2 and (b[p2].isdigit() if isnum else b[p2].isalpha()): p2 += 1
-        if o1 == p1: return -1
-        if o2 == p2: return 1 if isnum else -1
+        while p1 < l1 and (a[p1].isdigit() if isnum else a[p1].isalpha()):
+            p1 += 1
+        while p2 < l2 and (b[p2].isdigit() if isnum else b[p2].isalpha()):
+            p2 += 1
+        if o1 == p1:
+            return -1
+        if o2 == p2:
+            return 1 if isnum else -1
         s1, s2 = a[o1:p1], b[o2:p2]
         if isnum:
             s1, s2 = s1.lstrip('0'), s2.lstrip('0')
-            if len(s1) != len(s2): return 1 if len(s1) > len(s2) else -1
-        if s1 != s2: return -1 if s1 < s2 else 1
-    if p1 == l1 and p2 == l2: return 0
-    if (p1 == l1 and (p2 < l2 and not b[p2].isalpha())) or (p1 < l1 and a[p1].isalpha()): return -1
+            if len(s1) != len(s2):
+                return 1 if len(s1) > len(s2) else -1
+        if s1 != s2:
+            return -1 if s1 < s2 else 1
+    if p1 == l1 and p2 == l2:
+        return 0
+    if (p1 == l1 and (p2 < l2 and not b[p2].isalpha())) or (p1 < l1 and a[p1].isalpha()):
+        return -1
     return 1
 
 def alpm_vercmp(a: str, b: str) -> int:
-    if a == b: return 0
-    if not a or not b: return -1 if not a else 1
+    if a == b:
+        return 0
+    if not a or not b:
+        return -1 if not a else 1
     e1, v1, r1 = parse_evr(a)
     e2, v2, r2 = parse_evr(b)
     ret = rpmvercmp(e1, e2)
