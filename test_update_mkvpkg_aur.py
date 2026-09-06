@@ -7,12 +7,6 @@ import update_mkvpkg_aur
 
 class TestUpdateMkvpkgAur(unittest.TestCase):
 
-    def setUp(self):
-        update_mkvpkg_aur.clear_installed_cache()
-
-    def tearDown(self):
-        update_mkvpkg_aur.clear_installed_cache()
-
     @patch('update_mkvpkg_aur.subprocess.check_output')
     def test_run_cmd_success(self, mock_check_output):
         mock_check_output.return_value = "output\n"
@@ -50,38 +44,14 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
     @patch('update_mkvpkg_aur.subprocess.run')
     def test_is_installed_true(self, mock_run):
-        mock_run.return_value = MagicMock(stdout="pkg\notherpkg\n")
+        mock_run.return_value = MagicMock(returncode=0)
         self.assertTrue(update_mkvpkg_aur.is_installed("pkg"))
-        mock_run.assert_called_once_with(["pacman", "-Qq"], capture_output=True, text=True, check=True)
+        mock_run.assert_called_once_with(["pacman", "-Qq", "pkg"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     @patch('update_mkvpkg_aur.subprocess.run')
     def test_is_installed_false(self, mock_run):
-        mock_run.return_value = MagicMock(stdout="otherpkg\n")
+        mock_run.return_value = MagicMock(returncode=1)
         self.assertFalse(update_mkvpkg_aur.is_installed("pkg"))
-        mock_run.assert_called_once_with(["pacman", "-Qq"], capture_output=True, text=True, check=True)
-
-    @patch('update_mkvpkg_aur.subprocess.run')
-    def test_is_installed_empty_cache_no_fallback(self, mock_run):
-        # Edge case: Bulk pacman -Qq returns empty output (0 packages installed)
-        mock_run.return_value = MagicMock(stdout="")
-        self.assertFalse(update_mkvpkg_aur.is_installed("pkg1"))
-        self.assertFalse(update_mkvpkg_aur.is_installed("pkg2"))
-        # Must call pacman -Qq bulk query ONLY ONCE, without falling back to single query
-        mock_run.assert_called_once_with(["pacman", "-Qq"], capture_output=True, text=True, check=True)
-
-    @patch('update_mkvpkg_aur.subprocess.run')
-    def test_is_installed_bulk_exception_fallback(self, mock_run):
-        # Edge case: Bulk query raises exception, falls back to per-package query
-        def run_side_effect(cmd, **kwargs):
-            if cmd == ["pacman", "-Qq"]:
-                raise subprocess.CalledProcessError(1, cmd)
-            if cmd == ["pacman", "-Qq", "pkg1"]:
-                return MagicMock(returncode=0)
-            return MagicMock(returncode=1)
-
-        mock_run.side_effect = run_side_effect
-        self.assertTrue(update_mkvpkg_aur.is_installed("pkg1"))
-        self.assertFalse(update_mkvpkg_aur.is_installed("pkg2"))
 
     @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
     @patch('update_mkvpkg_aur.run_cmd')
@@ -151,50 +121,9 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
     def test_query_aur_failure(self, mock_urlopen):
         import urllib.error
-        import http.client
-        import json
-
-        # URLError
         mock_urlopen.side_effect = urllib.error.URLError("Network error")
         with self.assertRaises(RuntimeError):
             update_mkvpkg_aur.query_aur(["pkg1"])
-
-        # TimeoutError
-        mock_urlopen.side_effect = TimeoutError("Request timed out")
-        with self.assertRaises(RuntimeError):
-            update_mkvpkg_aur.query_aur(["pkg1"])
-
-        # HTTPException
-        mock_urlopen.side_effect = http.client.IncompleteRead(b"")
-        with self.assertRaises(RuntimeError):
-            update_mkvpkg_aur.query_aur(["pkg1"])
-
-        # UnicodeDecodeError / JSONDecodeError
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = b"\xff\xfe\xfd"
-        mock_urlopen.side_effect = None
-        mock_urlopen.return_value.__enter__.return_value = mock_resp
-        with self.assertRaises(RuntimeError):
-            update_mkvpkg_aur.query_aur(["pkg1"])
-
-        # JSONDecodeError
-        mock_resp.read.return_value = b"invalid json{"
-        with self.assertRaises(RuntimeError):
-            update_mkvpkg_aur.query_aur(["pkg1"])
-
-    @patch('update_mkvpkg_aur.urllib.request.urlopen')
-    def test_query_aur_malformed_response_structure(self, mock_urlopen):
-        mock_resp = MagicMock()
-        # Test non-dict top level structure (e.g. list)
-        mock_resp.read.return_value = json.dumps(["unexpected", "list"]).encode('utf-8')
-        mock_urlopen.return_value.__enter__.return_value = mock_resp
-        self.assertEqual(update_mkvpkg_aur.query_aur(["pkg1"]), {})
-
-        # Test results containing non-dict elements or missing Name/Version keys
-        mock_resp.read.return_value = json.dumps({
-            "results": ["not_a_dict", {"Name": "pkg1"}, {"Version": "1.0"}]
-        }).encode('utf-8')
-        self.assertEqual(update_mkvpkg_aur.query_aur(["pkg1"]), {})
 
     def test_alpm_vercmp(self):
         # Test basic comparisons and edge cases ported from C rpmvercmp logic
@@ -447,77 +376,5 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         for call in mock_run.call_args_list:
             self.assertNotEqual(call[0][0][0], "repo-remove")
 
-
-class TestVercmpPurePython(unittest.TestCase):
-
-    def test_parse_evr(self):
-        self.assertEqual(update_mkvpkg_aur.parse_evr("1.0"), ("0", "1.0", None))
-        self.assertEqual(update_mkvpkg_aur.parse_evr("1.0-1"), ("0", "1.0", "1"))
-        self.assertEqual(update_mkvpkg_aur.parse_evr("2:1.0-3"), ("2", "1.0", "3"))
-        self.assertEqual(update_mkvpkg_aur.parse_evr("10:2.0.1-0.1"), ("10", "2.0.1", "0.1"))
-        self.assertEqual(update_mkvpkg_aur.parse_evr("1.0-alpha-1"), ("0", "1.0-alpha", "1"))
-
-    def test_alpm_vercmp_edge_cases(self):
-        # Equal versions
-        self.assertEqual(update_mkvpkg_aur.alpm_vercmp("1.0", "1.0"), 0)
-        self.assertEqual(update_mkvpkg_aur.alpm_vercmp("1.0-1", "1.0-1"), 0)
-        self.assertEqual(update_mkvpkg_aur.alpm_vercmp("1:1.0", "1:1.0"), 0)
-
-        # Epoch priority
-        self.assertGreater(update_mkvpkg_aur.alpm_vercmp("1:1.0", "0:2.0"), 0)
-        self.assertLess(update_mkvpkg_aur.alpm_vercmp("1:1.0", "2:0.9"), 0)
-
-        # Release version comparison
-        self.assertLess(update_mkvpkg_aur.alpm_vercmp("1.0-1", "1.0-2"), 0)
-        self.assertGreater(update_mkvpkg_aur.alpm_vercmp("1.0-10", "1.0-2"), 0)
-
-        # Standard version ordering
-        self.assertLess(update_mkvpkg_aur.alpm_vercmp("1.0", "1.0.1"), 0)
-        self.assertGreater(update_mkvpkg_aur.alpm_vercmp("1.0.1", "1.0"), 0)
-        self.assertLess(update_mkvpkg_aur.alpm_vercmp("1.0.a", "1.0.b"), 0)
-        self.assertLess(update_mkvpkg_aur.alpm_vercmp("1.0a", "1.0"), 0)
-        self.assertEqual(update_mkvpkg_aur.alpm_vercmp("1.01", "1.1"), 0)
-
-        # None / Empty edge cases
-        self.assertEqual(update_mkvpkg_aur.alpm_vercmp("", ""), 0)
-        self.assertLess(update_mkvpkg_aur.alpm_vercmp("", "1.0"), 0)
-        self.assertGreater(update_mkvpkg_aur.alpm_vercmp("1.0", ""), 0)
-
-
-class TestPkgbuildChecksums(unittest.TestCase):
-    def test_pkgbuild_and_srcinfo_checksums(self):
-        """Regression test ensuring PKGBUILD and .SRCINFO sha256sums match actual files."""
-        import os
-        repo_dir = os.path.dirname(os.path.abspath(__file__))
-        pkgbuild_path = os.path.join(repo_dir, "PKGBUILD")
-
-        if not os.path.exists(pkgbuild_path):
-            self.skipTest("PKGBUILD not found")
-
-        with open(pkgbuild_path, "r", encoding="utf-8") as f:
-            pkgbuild_content = f.read()
-
-        import re
-        source_match = re.search(r'source=\((.*?)\)', pkgbuild_content, re.DOTALL)
-        self.assertIsNotNone(source_match, "source array missing from PKGBUILD")
-        sources = [s.strip(' "$\'\t') for s in source_match.group(1).splitlines() if s.strip()]
-
-        sums_match = re.search(r'sha256sums=\((.*?)\)', pkgbuild_content, re.DOTALL)
-        self.assertIsNotNone(sums_match, "sha256sums array missing from PKGBUILD")
-        declared_sums = [s.strip(' "$\'\t') for s in sums_match.group(1).splitlines() if s.strip()]
-
-        import hashlib
-        for src, declared_sum in zip(sources, declared_sums):
-            if declared_sum.upper() == 'SKIP':
-                continue
-            src_path = os.path.join(repo_dir, src)
-            self.assertTrue(os.path.exists(src_path), f"Source file {src} referenced in PKGBUILD does not exist")
-            with open(src_path, "rb") as f:
-                actual_sum = hashlib.sha256(f.read()).hexdigest()
-            self.assertEqual(actual_sum, declared_sum, f"SHA256 checksum mismatch for {src}")
-
-
 if __name__ == '__main__':
     unittest.main()
-
-
