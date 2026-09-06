@@ -450,6 +450,28 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
 class TestVercmpPurePython(unittest.TestCase):
 
+    def test_rpmvercmp(self):
+        # Basic numeric comparisons
+        self.assertEqual(update_mkvpkg_aur.rpmvercmp("1.0", "1.0"), 0)
+        self.assertLess(update_mkvpkg_aur.rpmvercmp("1.0", "1.1"), 0)
+        self.assertGreater(update_mkvpkg_aur.rpmvercmp("1.1", "1.0"), 0)
+        self.assertGreater(update_mkvpkg_aur.rpmvercmp("1.10", "1.2"), 0)
+
+        # Alphanumeric comparisons
+        self.assertGreater(update_mkvpkg_aur.rpmvercmp("1.0", "1.0a"), 0)
+        self.assertLess(update_mkvpkg_aur.rpmvercmp("1.0a", "1.0b"), 0)
+        self.assertGreater(update_mkvpkg_aur.rpmvercmp("1.1", "1.a"), 0)
+        self.assertLess(update_mkvpkg_aur.rpmvercmp("alpha", "beta"), 0)
+
+        # Zero padding
+        self.assertEqual(update_mkvpkg_aur.rpmvercmp("001", "1"), 0)
+        self.assertEqual(update_mkvpkg_aur.rpmvercmp("1.01", "1.1"), 0)
+
+        # Empty string and edge cases
+        self.assertEqual(update_mkvpkg_aur.rpmvercmp("", ""), 0)
+        self.assertLess(update_mkvpkg_aur.rpmvercmp("", "1"), 0)
+        self.assertGreater(update_mkvpkg_aur.rpmvercmp("1", ""), 0)
+
     def test_parse_evr(self):
         self.assertEqual(update_mkvpkg_aur.parse_evr("1.0"), ("0", "1.0", None))
         self.assertEqual(update_mkvpkg_aur.parse_evr("1.0-1"), ("0", "1.0", "1"))
