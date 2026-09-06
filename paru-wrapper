@@ -12,6 +12,26 @@ set -euo pipefail
 
 declare -gA _aur_pkgs_cache=()
 
+if [ -z "${NO_COLOR:-}" ] && [ -t 2 ]; then
+    C_INFO='\e[1;34m'
+    C_WARN='\e[1;33m'
+    C_ERR='\e[1;31m'
+    C_DRY='\e[1;35m'
+    C_RESET='\e[0m'
+else
+    C_INFO=''
+    C_WARN=''
+    C_ERR=''
+    C_DRY=''
+    C_RESET=''
+fi
+
+log_info() { echo -e "${C_INFO}[paru-wrapper]${C_RESET} $*" >&2; }
+log_warn() { echo -e "${C_WARN}[paru-wrapper] Warning:${C_RESET} $*" >&2; }
+log_err()  { echo -e "${C_ERR}[paru-wrapper] Error:${C_RESET} $*" >&2; }
+log_dry()  { echo -e "${C_DRY}[paru-wrapper] DRY RUN:${C_RESET} $*" >&2; }
+
+
 # /**
 #  * Resolves the AUR package metadata in batched chunks.
 #  *
@@ -168,7 +188,7 @@ set -- "${POSITIONAL_ARGS[@]}"
 # Safely clean up any stale null symlinks from a previously interrupted transaction
 for hook in 05-snap-pac-pre.hook zz-snap-pac-post.hook paru-completion-update.hook rebuild-check.hook; do
     if [ -L "/etc/pacman.d/hooks/$hook" ] && [ "$(readlink "/etc/pacman.d/hooks/$hook")" = "/dev/null" ]; then
-        echo "[paru-wrapper] Warning: Detected stale disabled hook '$hook' from a previous run. Restoring..." >&2
+        log_warn "Detected stale disabled hook '$hook' from a previous run. Restoring..."
         sudo rm -f "/etc/pacman.d/hooks/$hook"
     fi
 done
@@ -221,7 +241,7 @@ if [ "$is_transaction" = true ]; then
 
     if [ "$is_anneal" = true ] || [ "${FORCE_REBUILD:-0}" = "1" ]; then
         # Disable selected hooks to prevent snapper/completion/rebuild-check spam during intermediate package installations
-        echo "[paru-wrapper] Temporarily disabling redundant hooks..." >&2
+        log_info "Temporarily disabling redundant hooks..."
         sudo ln -sf /dev/null /etc/pacman.d/hooks/05-snap-pac-pre.hook
         sudo ln -sf /dev/null /etc/pacman.d/hooks/zz-snap-pac-post.hook
         sudo ln -sf /dev/null /etc/pacman.d/hooks/paru-completion-update.hook
@@ -251,7 +271,7 @@ if [ "$is_transaction" = true ]; then
                     pkg_base=$(basename "$pkg_file")
                     pkg_name=$(echo "$pkg_base" | sed -E 's/-[0-9].*//')
                     if [[ ! "$pkg_name" =~ -git$ ]] && pacman -Qq "${pkg_name}-git" >/dev/null 2>&1; then
-                        echo "[paru-wrapper] Skipping auto-indexing of '$pkg_base' because installed '${pkg_name}-git' takes priority." >&2
+                        log_info "Skipping auto-indexing of '$pkg_base' because installed '${pkg_name}-git' takes priority."
                         rm -f "$pkg_file" 2>/dev/null || true
                     else
                         filtered_new_pkgs+=("$pkg_file")
@@ -264,12 +284,12 @@ if [ "$is_transaction" = true ]; then
                 for pkg in "${new_pkgs[@]}"; do
                     echo "  -> $(basename "$pkg")" >&2
                 done
-                echo "[paru-wrapper] Automatically updating $PARU_WRAPPER_REPO repository database at ${PARU_WRAPPER_REPO_DB}..." >&2
+                log_info "Automatically updating $PARU_WRAPPER_REPO repository database at ${PARU_WRAPPER_REPO_DB}..."
                 if [ "$DRY_RUN" = true ]; then
-                    echo "[paru-wrapper] DRY RUN: would run: repo-add -R -w \"${PARU_WRAPPER_REPO_DB}\" \"${new_pkgs[*]}\"" >&2
+                    log_dry "would run: repo-add -R -w \"${PARU_WRAPPER_REPO_DB}\" \"${new_pkgs[*]}\"" >&2
                 else
-                    repo-add -R -w "$PARU_WRAPPER_REPO_DB" "${new_pkgs[@]}" || echo "[paru-wrapper] Warning: Failed to update repository database" >&2
-                    echo "[paru-wrapper] $PARU_WRAPPER_REPO repository database updated successfully." >&2
+                    repo-add -R -w "$PARU_WRAPPER_REPO_DB" "${new_pkgs[@]}" || log_warn "Failed to update repository database"
+                    log_info "$PARU_WRAPPER_REPO repository database updated successfully."
                 fi
             fi
             rm -f "$start_marker"
@@ -280,7 +300,7 @@ if [ "$is_transaction" = true ]; then
     # Take a single manual pre-transaction snapper snapshot
     if [ "$hooks_disabled" = true ] && command -v snapper >/dev/null; then
         if [ "$DRY_RUN" = true ]; then
-            echo "[paru-wrapper] DRY RUN: would take pre-transaction snapper snapshot" >&2
+            log_dry "would take pre-transaction snapper snapshot"
             PRE_SNAP_ID=""
         else
             PRE_SNAP_ID=$(sudo snapper -c root create -d "paru-wrapper pre-transaction" -t pre -p)
@@ -300,9 +320,9 @@ if [ "$is_transaction" = true ]; then
 
         if [ ${#aur_updater[@]} -gt 0 ]; then
             if [ "$DRY_RUN" = true ]; then
-                echo "[paru-wrapper] DRY RUN: would run ${aur_updater[*]}" >&2
+                log_dry "would run ${aur_updater[*]}"
             else
-                "${aur_updater[@]}" || echo "[paru-wrapper] Warning: update_mkvpkg_aur.py failed" >&2
+                "${aur_updater[@]}" || log_warn "update_mkvpkg_aur.py failed"
             fi
         fi
     fi
@@ -327,7 +347,7 @@ if [ "$is_transaction" = true ]; then
         export FORCE_REBUILD=1
         REPO_DIR=$(dirname "$PARU_WRAPPER_REPO_DB")
         for pkg in "${targets[@]}"; do
-            echo "[paru-wrapper] Rebuild requested for '$pkg'. Purging stale binaries from $PARU_WRAPPER_REPO..." >&2
+            log_info "Rebuild requested for '$pkg'. Purging stale binaries from $PARU_WRAPPER_REPO..."
             rm -f "$REPO_DIR/$pkg-"*.pkg.tar.zst 2>/dev/null || true
             repo-remove -w "$PARU_WRAPPER_REPO_DB" "$pkg" 2>/dev/null || true
         done
@@ -374,37 +394,37 @@ if [ "$is_transaction" = true ]; then
             if [ "$in_aur" -eq 0 ]; then
                 # Local package not in AUR: rebuild from PROJECTS_DIR if available
                 if [ -d "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}" ] && [ -f "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}/PKGBUILD" ]; then
-                    echo "[paru-wrapper] Rebuilding local package '$pkg' from source in ${PARU_WRAPPER_PROJECTS_DIR}..." >&2
+                    log_info "Rebuilding local package '$pkg' from source in ${PARU_WRAPPER_PROJECTS_DIR}..."
                     if [ "$DRY_RUN" = true ]; then
-                        echo "[paru-wrapper] DRY RUN: would run: (cd \"${PARU_WRAPPER_PROJECTS_DIR}/${pkg}\" && makepkg -sfi --noconfirm)" >&2
+                        log_dry "would run: (cd \"${PARU_WRAPPER_PROJECTS_DIR}/${pkg}\" && makepkg -sfi --noconfirm)" >&2
                     else
                         if (cd "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}" && makepkg -sfi --noconfirm); then
                             if command -v anneal >/dev/null; then
-                                echo "[paru-wrapper] Unmarking '$pkg' in anneal rebuild queue..." >&2
+                                log_info "Unmarking '$pkg' in anneal rebuild queue..."
                                 sudo anneal unmark "$pkg" 2>/dev/null || true
                             fi
                         fi
                     fi
                 else
-                    echo "[paru-wrapper] Warning: Package '$pkg' is not in the AUR and no source found in ${PARU_WRAPPER_PROJECTS_DIR}. Skipping." >&2
+                    log_warn "Package '$pkg' is not in the AUR and no source found in ${PARU_WRAPPER_PROJECTS_DIR}. Skipping."
                 fi
             elif [ "${FORCE_REBUILD:-0}" = "1" ]; then
                 # Force rebuild standard AUR package from source to link against new libraries
-                echo "[paru-wrapper] FORCE_REBUILD active. Rebuilding AUR package '$pkg' from source..." >&2
+                log_info "FORCE_REBUILD active. Rebuilding AUR package '$pkg' from source..."
                 if [ "$DRY_RUN" = true ]; then
-                    echo "[paru-wrapper] DRY RUN: would clone and rebuild '$pkg' from AUR." >&2
+                    log_dry "would clone and rebuild '$pkg' from AUR."
                 else
                     build_dir=$(mktemp -d)
                     if git clone --depth 1 "https://aur.archlinux.org/$pkg.git" "$build_dir" 2>/dev/null; then
                         if (cd "$build_dir" && makepkg -sfi --noconfirm); then
                             if command -v anneal >/dev/null; then
-                                echo "[paru-wrapper] Unmarking '$pkg' in anneal rebuild queue..." >&2
+                                log_info "Unmarking '$pkg' in anneal rebuild queue..."
                                 sudo anneal unmark "$pkg" 2>/dev/null || true
                             fi
                         fi
                         rm -rf "$build_dir"
                     else
-                        echo "[paru-wrapper] Warning: Failed to clone '$pkg' from AUR. Passing to paru." >&2
+                        log_warn "Failed to clone '$pkg' from AUR. Passing to paru."
                         rm -rf "$build_dir"
                         filtered_targets+=("$pkg")
                     fi
@@ -420,7 +440,7 @@ if [ "$is_transaction" = true ]; then
     set -- "${other_args[@]}" "${filtered_targets[@]}"
 
     if [ ${#targets[@]} -gt 0 ] && [ ${#filtered_targets[@]} -eq 0 ]; then
-        echo "[paru-wrapper] All requested targets rebuilt locally. Skipping paru execution." >&2
+        log_info "All requested targets rebuilt locally. Skipping paru execution."
         exit 0
     fi
 
@@ -467,7 +487,7 @@ if [ "$is_transaction" = true ]; then
         orphans_to_remove=()
         for orphan in $orphans; do
             if [[ "$new_deps_padded" == *$'\n'"$orphan"$'\n'* ]]; then
-                echo "[paru-wrapper] Preserving orphan package '$orphan' (will be needed by incoming updates)." >&2
+                log_info "Preserving orphan package '$orphan' (will be needed by incoming updates)."
             else
                 orphans_to_remove+=("$orphan")
             fi
@@ -475,19 +495,13 @@ if [ "$is_transaction" = true ]; then
         
         # 5. Clean the remaining orphans
         if [[ ${#orphans_to_remove[@]} -gt 0 ]]; then
-            if [ -z "${NO_COLOR:-}" ]; then
-                c_info='\e[1;34m'
-                c_reset='\e[0m'
-            else
-                c_info=''
-                c_reset=''
-            fi
-            echo -e "\n${c_info}[paru-wrapper]${c_reset} Cleaning ${#orphans_to_remove[@]} orphaned package(s):" >&2
+            echo "" >&2
+            log_info "Cleaning ${#orphans_to_remove[@]} orphaned package(s):"
             for pkg in "${orphans_to_remove[@]}"; do
                 echo "  -> $pkg" >&2
             done
             if [ "$DRY_RUN" = true ]; then
-                echo "[paru-wrapper] DRY RUN: would run: sudo pacman -Rns --noconfirm -- ${orphans_to_remove[*]}" >&2
+                log_dry "would run: sudo pacman -Rns --noconfirm -- ${orphans_to_remove[*]}"
             else
                 sudo pacman -Rns --noconfirm -- "${orphans_to_remove[@]}"
             fi
@@ -499,7 +513,7 @@ fi
 if [ "$is_transaction" = true ]; then
     if [ "${FORCE_REBUILD:-0}" = "1" ] || [[ " $* " =~ " --rebuild " ]]; then
         if [ "$DRY_RUN" = true ]; then
-            echo "[paru-wrapper] DRY RUN: would run: /usr/bin/paru --rebuild --pacman /usr/bin/pacman-wrapper $*" >&2
+            log_dry "would run: /usr/bin/paru --rebuild --pacman /usr/bin/pacman-wrapper $*"
             exit_code=0
         else
             /usr/bin/paru --rebuild --pacman /usr/bin/pacman-wrapper "$@"
@@ -507,7 +521,7 @@ if [ "$is_transaction" = true ]; then
         fi
     else
         if [ "$DRY_RUN" = true ]; then
-            echo "[paru-wrapper] DRY RUN: would run: /usr/bin/paru --pacman /usr/bin/pacman-wrapper $*" >&2
+            log_dry "would run: /usr/bin/paru --pacman /usr/bin/pacman-wrapper $*"
             exit_code=0
         else
             /usr/bin/paru --pacman /usr/bin/pacman-wrapper "$@"
@@ -516,7 +530,7 @@ if [ "$is_transaction" = true ]; then
     fi
 else
     if [ "$DRY_RUN" = true ]; then
-        echo "[paru-wrapper] DRY RUN: would run: /usr/bin/paru $*" >&2
+        log_dry "would run: /usr/bin/paru $*"
         exit_code=0
     else
         /usr/bin/paru "$@"
@@ -527,7 +541,7 @@ fi
 if [ "$is_transaction" = true ]; then
     # Restore pacman hooks and update database
     if [ "$hooks_disabled" = true ]; then
-        echo "[paru-wrapper] Restoring pacman hooks and updating database..." >&2
+        log_info "Restoring pacman hooks and updating database..."
     fi
     cleanup_hooks
 
@@ -537,9 +551,9 @@ if [ "$is_transaction" = true ]; then
     # Take a manual post-transaction snapper snapshot
     if [ "$hooks_disabled" = true ] && [[ -n "${PRE_SNAP_ID:-}" ]]; then
         if [ "$DRY_RUN" = true ]; then
-            echo "[paru-wrapper] DRY RUN: would take post-transaction snapper snapshot." >&2
+            log_dry "would take post-transaction snapper snapshot."
         else
-            echo "[paru-wrapper] Taking post-transaction snapper snapshot..." >&2
+            log_info "Taking post-transaction snapper snapshot..."
             sudo snapper -c root create -d "paru-wrapper post-transaction" -t post --pre-number "$PRE_SNAP_ID"
         fi
     fi
@@ -547,9 +561,9 @@ fi
 
 if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ] && [ "${hooks_disabled:-false}" = true ]; then
     # Trigger deferred hook updates once at the very end
-    echo "[paru-wrapper] Running deferred completion and rebuild-check hooks..." >&2
+    log_info "Running deferred completion and rebuild-check hooks..."
     if [ "$DRY_RUN" = true ]; then
-        echo "[paru-wrapper] DRY RUN: would run paru-completion-update and rebuild-check." >&2
+        log_dry "would run paru-completion-update and rebuild-check."
     else
         sudo /usr/bin/paru-completion-update || true
         # Prevent unbound variable error on $targets if it's empty
@@ -567,7 +581,7 @@ if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ]; then
     RUN_USER_HOME=$(getent passwd "$INVOKING_USER" | cut -d: -f6)
     VAULT_SYNC_SCRIPT="${RUN_USER_HOME}/.gemini/config/scripts/auto_sync_vault.py"
     if [ -f "$VAULT_SYNC_SCRIPT" ]; then
-        echo "[paru-wrapper] Triggering agy-syncvault background sync..." >&2
+        log_info "Triggering agy-syncvault background sync..."
         runuser -u "$INVOKING_USER" -- python3 "$VAULT_SYNC_SCRIPT" >/dev/null 2>&1 &
     fi
 fi
