@@ -1,3 +1,4 @@
+# Maintainer: Releaser <releaser@example.com>
 pkgname=paru-wrapper
 pkgver=1.0.0
 pkgrel=6
