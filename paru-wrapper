@@ -64,7 +64,7 @@ run_paru_with_clone_repair() {
     local max_retries=3 attempt=0 exit_code=0
 
     while ((attempt < max_retries)); do
-        ((attempt++))
+        ((++attempt))
         exit_code=0
         /usr/bin/paru "$@" || exit_code=$?
 
