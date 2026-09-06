@@ -94,7 +94,7 @@ pkgdesc="Dummy package"
 arch=('any')
 license=('GPL')
 EOF
-        (cd "$DUMMY_DIR" && makepkg -s --noconfirm >/dev/null 2>&1 || true)
+        (cd "$DUMMY_DIR" || exit 1; makepkg -s --noconfirm >/dev/null 2>&1 || true)
         repo-add "$REPO_DB" "$DUMMY_DIR/dummy-1-1-any.pkg.tar.zst" >/dev/null 2>&1 || true
         repo-remove "$REPO_DB" dummy >/dev/null 2>&1 || true
         rm -rf "$DUMMY_DIR"
@@ -437,8 +437,8 @@ if [ "$is_transaction" = true ]; then
             echo "$total_pkgs" | sudo -u "$SUDO_USER" tee "$CACHE_DIR/paru_total_packages" >/dev/null 2>&1 || true
             echo "0" | sudo -u "$SUDO_USER" tee "$CACHE_DIR/paru_completed_packages" >/dev/null 2>&1 || true
         else
-            [ ! -L "$CACHE_DIR/paru_total_packages" ] && echo "$total_pkgs" > "$CACHE_DIR/paru_total_packages" 2>/dev/null || true
-            [ ! -L "$CACHE_DIR/paru_completed_packages" ] && echo "0" > "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
+            rm -f "$CACHE_DIR/paru_total_packages" 2>/dev/null || true; echo "$total_pkgs" > "$CACHE_DIR/paru_total_packages" 2>/dev/null || true
+            rm -f "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true; echo "0" > "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
         fi
     else
         rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true

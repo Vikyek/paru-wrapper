@@ -14,7 +14,7 @@ source=(
     "pacman-wrapper"
     "LICENSE"
 )
-sha256sums=('557814987e53c13490f95218c06babba0bfd97f0666dae0ddd864d7a46be9fc5'
+sha256sums=('276d8e1e54964977f2cbee326cfee00c6f42a58c64bde7e4ba83a966d6b1cbd7'
             '1ffdbc8bd092e77a723677156b3b5444ed893f4ef976b9157127ff022986c1f3'
             'da96c114a193f1f000539c05a2a4f90655ea25296cba0d8947a87dee3822656b'
             '3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986')
