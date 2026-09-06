@@ -329,8 +329,9 @@ if [ "$is_transaction" = true ]; then
         for pkg in "${targets[@]}"; do
             echo "[paru-wrapper] Rebuild requested for '$pkg'. Purging stale binaries from $PARU_WRAPPER_REPO..." >&2
             rm -f "$REPO_DIR/$pkg-"*.pkg.tar.zst 2>/dev/null || true
-            repo-remove -w "$PARU_WRAPPER_REPO_DB" "$pkg" 2>/dev/null || true
         done
+        # Batch repo-remove outside the loop for O(1) invocation rather than N+1
+        repo-remove -w "$PARU_WRAPPER_REPO_DB" "${targets[@]}" 2>/dev/null || true
         sudo pacman -Sy >/dev/null 2>&1 || true
     fi
 
