@@ -84,6 +84,11 @@ def alpm_vercmp(a: str, b: str) -> int:
 
 _installed_cache = None
 
+def clear_installed_cache():
+    """Clears the cached set of installed packages."""
+    global _installed_cache
+    _installed_cache = None
+
 def is_installed(pkg):
     """
     Checks if a given package is currently installed on the system.
@@ -97,15 +102,15 @@ def is_installed(pkg):
             res = subprocess.run(["pacman", "-Qq"], capture_output=True, text=True, check=True) # nosec
             _installed_cache = set(res.stdout.splitlines())
         except Exception:
-            _installed_cache = set()
+            _installed_cache = None
 
-    if _installed_cache:
+    if _installed_cache is not None:
         return pkg in _installed_cache
 
     try:
         res = subprocess.run(["pacman", "-Qq", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) # nosec
         return res.returncode == 0
-    except FileNotFoundError:
+    except Exception:
         return False
 
 def get_mkvpkg_packages_and_versions():
@@ -126,6 +131,8 @@ def get_mkvpkg_packages_and_versions():
                 packages[parts[1]] = parts[2]
     return packages
 
+import http.client
+
 def query_aur(packages):
     """
     Resolves the AUR package metadata in batched chunks to prevent URL length limits.
@@ -145,9 +152,11 @@ def query_aur(packages):
             req = urllib.request.Request(url, headers={'User-Agent': 'paru-wrapper-updater'})
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode('utf-8'))
-                for res in data.get('results', []):
-                    results[res['Name']] = res['Version']
-        except (urllib.error.URLError, json.JSONDecodeError) as e:
+                if isinstance(data, dict):
+                    for res in data.get('results', []):
+                        if isinstance(res, dict) and 'Name' in res and 'Version' in res:
+                            results[res['Name']] = res['Version']
+        except (urllib.error.URLError, json.JSONDecodeError, TimeoutError, http.client.HTTPException, UnicodeDecodeError) as e:
             raise RuntimeError(f"Error querying AUR for batch: {e}") from e
     return results
 
