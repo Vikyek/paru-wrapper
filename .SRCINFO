@@ -1,7 +1,7 @@
 pkgbase = paru-wrapper
 	pkgdesc = A wrapper around paru that implements dependency-aware orphan cleaning and automatic local repository DB updates
 	pkgver = 1.0.0
-	pkgrel = 6
+	pkgrel = 7
 	url = https://github.com/Vikyek/paru-wrapper
 	install = paru-wrapper.install
 	arch = any

@@ -1,7 +1,7 @@
 # Maintainer: Releaser <releaser@example.com>
 pkgname=paru-wrapper
 pkgver=1.0.0
-pkgrel=6
+pkgrel=7
 pkgdesc="A wrapper around paru that implements dependency-aware orphan cleaning and automatic local repository DB updates"
 arch=('any')
 url="https://github.com/Vikyek/paru-wrapper"
