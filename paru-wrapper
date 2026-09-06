@@ -246,11 +246,14 @@ if [ "$is_transaction" = true ]; then
             REPO_DIR=$(dirname "$PARU_WRAPPER_REPO_DB")
             mapfile -t new_pkgs < <(find "$REPO_DIR" -name "*.pkg.tar.zst" -newer "$start_marker" 2>/dev/null || true)
             if [ ${#new_pkgs[@]} -gt 0 ]; then
+                # Optimization: Cache all installed git packages to avoid N+1 pacman queries in the loop
+                installed_git_pkgs=$(pacman -Qq | grep "\-git$" || true)
+                padded_git_pkgs=$'\n'"$installed_git_pkgs"$'\n'
                 filtered_new_pkgs=()
                 for pkg_file in "${new_pkgs[@]}"; do
                     pkg_base=$(basename "$pkg_file")
                     pkg_name=$(echo "$pkg_base" | sed -E 's/-[0-9].*//')
-                    if [[ ! "$pkg_name" =~ -git$ ]] && pacman -Qq "${pkg_name}-git" >/dev/null 2>&1; then
+                    if [[ ! "$pkg_name" =~ -git$ ]] && [[ "$padded_git_pkgs" == *$'\n'"${pkg_name}-git"$'\n'* ]]; then
                         echo "[paru-wrapper] Skipping auto-indexing of '$pkg_base' because installed '${pkg_name}-git' takes priority." >&2
                         rm -f "$pkg_file" 2>/dev/null || true
                     else
