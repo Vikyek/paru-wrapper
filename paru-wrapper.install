@@ -1,10 +1,22 @@
 post_install() {
-    echo "Creating paru-wrapper symlink at ${HOME}/.local/bin/paru..."
-    mkdir -p "${HOME}/.local/bin"
-    ln -sf /usr/bin/paru-wrapper "${HOME}/.local/bin/paru"
-    # Attempt to set ownership for the current user if available
-    if [ -n "${USER:-}" ]; then
-        chown "${USER}:${USER}" "${HOME}/.local/bin/paru" 2>/dev/null || true
+    if [ -n "${SUDO_USER:-}" ]; then
+        TARGET_USER="$SUDO_USER"
+        TARGET_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    else
+        TARGET_USER="$USER"
+        TARGET_HOME="$HOME"
+    fi
+
+    echo "Creating paru-wrapper symlink at ${TARGET_HOME}/.local/bin/paru..."
+    if [ -n "${TARGET_USER:-}" ]; then
+        install -d -o "${TARGET_USER}" -g "${TARGET_USER}" "${TARGET_HOME}/.local/bin" 2>/dev/null || mkdir -p "${TARGET_HOME}/.local/bin"
+    else
+        mkdir -p "${TARGET_HOME}/.local/bin"
+    fi
+    ln -sf /usr/bin/paru-wrapper "${TARGET_HOME}/.local/bin/paru"
+
+    if [ -n "${TARGET_USER:-}" ]; then
+        chown -h "${TARGET_USER}:${TARGET_USER}" "${TARGET_HOME}/.local/bin/paru" 2>/dev/null || true
     fi
 }
 
@@ -13,6 +25,12 @@ post_upgrade() {
 }
 
 post_remove() {
+    if [ -n "${SUDO_USER:-}" ]; then
+        TARGET_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    else
+        TARGET_HOME="$HOME"
+    fi
+
     echo "Removing paru-wrapper symlink..."
-    [ -L "${HOME}/.local/bin/paru" ] && rm -f "${HOME}/.local/bin/paru"
+    [ -L "${TARGET_HOME}/.local/bin/paru" ] && rm -f "${TARGET_HOME}/.local/bin/paru"
 }
