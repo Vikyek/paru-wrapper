@@ -457,6 +457,18 @@ class TestVercmpPurePython(unittest.TestCase):
         self.assertEqual(update_mkvpkg_aur.parse_evr("10:2.0.1-0.1"), ("10", "2.0.1", "0.1"))
         self.assertEqual(update_mkvpkg_aur.parse_evr("1.0-alpha-1"), ("0", "1.0-alpha", "1"))
 
+        # Edge cases
+        self.assertEqual(update_mkvpkg_aur.parse_evr(""), ("0", "", None))
+        self.assertEqual(update_mkvpkg_aur.parse_evr(":"), ("0", "", None))
+        self.assertEqual(update_mkvpkg_aur.parse_evr(":1.0"), ("0", "1.0", None))
+        self.assertEqual(update_mkvpkg_aur.parse_evr("1:"), ("1", "", None))
+        self.assertEqual(update_mkvpkg_aur.parse_evr("1:1.0"), ("1", "1.0", None))
+        self.assertEqual(update_mkvpkg_aur.parse_evr("-1"), ("0", "", "1"))
+        self.assertEqual(update_mkvpkg_aur.parse_evr("1:1.0-2-3"), ("1", "1.0-2", "3"))
+        self.assertEqual(update_mkvpkg_aur.parse_evr("1:1.0-"), ("1", "1.0", ""))
+        self.assertEqual(update_mkvpkg_aur.parse_evr("1:-"), ("1", "", ""))
+        self.assertEqual(update_mkvpkg_aur.parse_evr("1.0-"), ("0", "1.0", ""))
+
     def test_alpm_vercmp_edge_cases(self):
         # Equal versions
         self.assertEqual(update_mkvpkg_aur.alpm_vercmp("1.0", "1.0"), 0)
