@@ -61,6 +61,28 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         mock_run.assert_called_once_with(["pacman", "-Qq"], capture_output=True, text=True, check=True)
 
     @patch('update_mkvpkg_aur.subprocess.run')
+    def test_is_installed_caching(self, mock_run):
+        # Set up a mock return value
+        mock_run.return_value = MagicMock(stdout="pkg1\npkg2\n")
+
+        # First call should populate the cache
+        self.assertTrue(update_mkvpkg_aur.is_installed("pkg1"))
+        mock_run.assert_called_once_with(["pacman", "-Qq"], capture_output=True, text=True, check=True)
+
+        # Reset mock to verify it's NOT called again
+        mock_run.reset_mock()
+
+        # Second call should hit the cache
+        self.assertTrue(update_mkvpkg_aur.is_installed("pkg2"))
+        self.assertFalse(update_mkvpkg_aur.is_installed("pkg3"))
+
+        # subprocess.run should NOT be called again
+        mock_run.assert_not_called()
+
+        # Check internal state explicitly
+        self.assertEqual(update_mkvpkg_aur._installed_cache, {"pkg1", "pkg2"})
+
+    @patch('update_mkvpkg_aur.subprocess.run')
     def test_is_installed_empty_cache_no_fallback(self, mock_run):
         # Edge case: Bulk pacman -Qq returns empty output (0 packages installed)
         mock_run.return_value = MagicMock(stdout="")
