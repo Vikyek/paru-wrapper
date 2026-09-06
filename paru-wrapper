@@ -12,12 +12,6 @@ set -euo pipefail
 
 declare -gA _aur_pkgs_cache=()
 
-# /**
-#  * Resolves the AUR package metadata in batched chunks.
-#  *
-#  * @param pkgs - List of package names to query passed as arguments
-#  * @returns None (populates the global _aur_pkgs_cache associative array)
-#  */
 fetch_aur_metadata_batch() {
     local pkgs=("$@")
     local chunk_size=50
@@ -41,6 +35,59 @@ fetch_aur_metadata_batch() {
             fi
         done < <(echo "$curl_out" | jq -r '.results[]? | "\(.Name)\t\(.Version)"' 2>/dev/null)
     done
+}
+
+# Purge corrupted paru clone cache directories (missing .git)
+PARU_CLONE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/paru/clone"
+
+purge_broken_clones() {
+    [[ -d "$PARU_CLONE_DIR" ]] || return 0
+    local cleaned=0
+    for d in "$PARU_CLONE_DIR"/*/; do
+        [[ -d "$d" ]] || continue
+        if [[ ! -d "${d}.git" ]]; then
+            local pkg_name
+            pkg_name=$(basename "$d")
+            echo "[paru-wrapper] Purging corrupted clone cache: $pkg_name (missing .git)" >&2
+            rm -rf "$d"
+            ((cleaned++)) || true
+        fi
+    done
+    if [[ $cleaned -gt 0 ]]; then
+        echo "[paru-wrapper] Cleaned $cleaned corrupted clone cache(s)." >&2
+    fi
+    return 0
+}
+
+# Run paru with auto-retry on corrupted clone cache errors
+run_paru_with_clone_repair() {
+    local max_retries=3 attempt=0 exit_code=0
+
+    while ((attempt < max_retries)); do
+        ((attempt++))
+        exit_code=0
+        /usr/bin/paru "$@" || exit_code=$?
+
+        if [[ $exit_code -ne 0 ]]; then
+            # Scan for broken clone dirs that may have caused the failure
+            local repaired=false
+            if [[ -d "$PARU_CLONE_DIR" ]]; then
+                for d in "$PARU_CLONE_DIR"/*/; do
+                    [[ -d "$d" ]] || continue
+                    if [[ ! -d "${d}.git" ]]; then
+                        local pkg_name
+                        pkg_name=$(basename "$d")
+                        echo "[paru-wrapper] Auto-repairing corrupted clone cache: $pkg_name (attempt $attempt/$max_retries)" >&2
+                        rm -rf "$d"
+                        repaired=true
+                    fi
+                done
+            fi
+            if [[ "$repaired" == true ]]; then continue; fi
+        fi
+        break
+    done
+    return $exit_code
 }
 
 # Initialize variables to avoid unbound variable errors
@@ -229,7 +276,7 @@ if [ "$is_transaction" = true ]; then
         hooks_disabled=true
     fi
 
-    start_marker=$(mktemp -t paru_start_marker.XXXXXX)
+    start_marker=$(mktemp)
 
     cleanup_hooks() {
         # Restore pacman hooks
@@ -310,43 +357,31 @@ if [ "$is_transaction" = true ]; then
     # Extract target packages and other arguments
     targets=()
     other_args=()
-    is_rebuild_cmd=false
     for arg in "$@"; do
         if [[ "$arg" =~ ^- ]]; then
             other_args+=("$arg")
-            if [[ "$arg" == "--rebuild" || "$arg" == "--redownload" ]]; then
-                is_rebuild_cmd=true
-            fi
         else
             targets+=("$arg")
         fi
     done
 
-    # If --rebuild or --redownload is requested, purge stale prebuilt binaries from local repo
-    if [ "$is_rebuild_cmd" = true ] && [ ${#targets[@]} -gt 0 ]; then
-        export FORCE_REBUILD=1
-        REPO_DIR=$(dirname "$PARU_WRAPPER_REPO_DB")
-        for pkg in "${targets[@]}"; do
-            echo "[paru-wrapper] Rebuild requested for '$pkg'. Purging stale binaries from $PARU_WRAPPER_REPO..." >&2
-            rm -f "$REPO_DIR/$pkg-"*.pkg.tar.zst 2>/dev/null || true
-            repo-remove -w "$PARU_WRAPPER_REPO_DB" "$pkg" 2>/dev/null || true
-        done
-        sudo pacman -Sy >/dev/null 2>&1 || true
-    fi
-
-    # Pre-cache official status for all packages using a single pacman invocation
+    # Pre-cache official status for all target packages using a single pacman invocation
     declare -A _official_pkgs_cache=()
     if [ ${#targets[@]} -gt 0 ]; then
-        while read -r repo name _; do
+        while read -r name repo; do
             if [[ -n "$repo" ]] && [[ "$repo" != "$PARU_WRAPPER_REPO" ]]; then
                 _official_pkgs_cache["$name"]=1
             fi
-        done < <(LC_ALL=C pacman -Sl 2>/dev/null | awk -v targets="${targets[*]}" 'BEGIN { split(targets, t, " "); for(i in t) tgts[t[i]]=1 } tgts[$2] { print $1, $2, $3 }')
+        done < <(LC_ALL=C pacman -Si "${targets[@]}" 2>/dev/null | awk -F '[ \t]*:[ \t]*' '/^Repository/ {r=$2} /^Name/ {print $2, r}')
     fi
 
     # Helper to check if package is in official repos
     is_official_pkg() {
-        [[ "${_official_pkgs_cache["$1"]:-}" == 1 ]]
+        local pkg="$1"
+        if [[ "${_official_pkgs_cache["$pkg"]:-}" == 1 ]]; then
+            return 0
+        fi
+        return 1
     }
 
     # Pre-fetch AUR metadata in batches
@@ -430,13 +465,8 @@ if [ "$is_transaction" = true ]; then
     # Write total packages to paru_total_packages for progress counter
     if [[ -n "$upgrades" ]]; then
         total_pkgs=$(echo "$upgrades" | grep -v "^$" | grep -c "")
-        if [ -n "${SUDO_USER:-}" ]; then
-            echo "$total_pkgs" | sudo -u "$SUDO_USER" tee "$CACHE_DIR/paru_total_packages" >/dev/null 2>&1 || true
-            echo "0" | sudo -u "$SUDO_USER" tee "$CACHE_DIR/paru_completed_packages" >/dev/null 2>&1 || true
-        else
-            [ ! -L "$CACHE_DIR/paru_total_packages" ] && echo "$total_pkgs" > "$CACHE_DIR/paru_total_packages" 2>/dev/null || true
-            [ ! -L "$CACHE_DIR/paru_completed_packages" ] && echo "0" > "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
-        fi
+        echo "$total_pkgs" > "$CACHE_DIR/paru_total_packages"
+        echo "0" > "$CACHE_DIR/paru_completed_packages"
     else
         rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
     fi
@@ -449,13 +479,13 @@ if [ "$is_transaction" = true ]; then
         new_deps=""
         if [[ -n "$upgrades" ]]; then
             # Query pacman sync database for repository packages dependencies
-            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | awk '/^(Depends On.*|Depends.*)[[:space:]]*:/ { in_deps=1; sub(/^.*:[[:space:]]*/, ""); print; next } /^[^[:space:]]/ { in_deps=0 } in_deps { print }' | tr -s ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
+            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | grep -iE '^(Depends On|Depends)[[:space:]]*:' | cut -d: -f2- | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
             
             # Query AUR RPC (or paru info) for AUR package dependencies
             aur_deps=""
             aur_upgrades=$(echo "$upgrades" | grep -vFf <(pacman -Slq 2>/dev/null) || true)
             if [[ -n "$aur_upgrades" ]]; then
-                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru -Si 2>/dev/null | awk '/^(Depends On.*|Depends.*)[[:space:]]*:/ { in_deps=1; sub(/^.*:[[:space:]]*/, ""); print; next } /^[^[:space:]]/ { in_deps=0 } in_deps { print }' | tr -s ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
+                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru -Si 2>/dev/null | grep -iE '^(Depends On|Depends)[[:space:]]*:' | cut -d: -f2- | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
             fi
 
             new_deps=$(echo -e "${repo_deps}\n${aur_deps}" | sort -u)
@@ -496,13 +526,14 @@ if [ "$is_transaction" = true ]; then
 fi
 
 # 6. Execute the real paru command
+purge_broken_clones
 if [ "$is_transaction" = true ]; then
     if [ "${FORCE_REBUILD:-0}" = "1" ] || [[ " $* " =~ " --rebuild " ]]; then
         if [ "$DRY_RUN" = true ]; then
             echo "[paru-wrapper] DRY RUN: would run: /usr/bin/paru --rebuild --pacman /usr/bin/pacman-wrapper $*" >&2
             exit_code=0
         else
-            /usr/bin/paru --rebuild --pacman /usr/bin/pacman-wrapper "$@"
+            run_paru_with_clone_repair --rebuild --pacman /usr/bin/pacman-wrapper "$@"
             exit_code=$?
         fi
     else
@@ -510,7 +541,7 @@ if [ "$is_transaction" = true ]; then
             echo "[paru-wrapper] DRY RUN: would run: /usr/bin/paru --pacman /usr/bin/pacman-wrapper $*" >&2
             exit_code=0
         else
-            /usr/bin/paru --pacman /usr/bin/pacman-wrapper "$@"
+            run_paru_with_clone_repair --pacman /usr/bin/pacman-wrapper "$@"
             exit_code=$?
         fi
     fi
@@ -519,7 +550,7 @@ else
         echo "[paru-wrapper] DRY RUN: would run: /usr/bin/paru $*" >&2
         exit_code=0
     else
-        /usr/bin/paru "$@"
+        run_paru_with_clone_repair "$@"
         exit_code=$?
     fi
 fi
