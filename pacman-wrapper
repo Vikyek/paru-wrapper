@@ -37,8 +37,10 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
 
             if [ -n "${SUDO_USER:-}" ]; then
                 echo "$completed" | sudo -u "$SUDO_USER" tee "$CACHE_DIR/paru_completed_packages" >/dev/null 2>&1 || true
-            elif [ ! -L "$CACHE_DIR/paru_completed_packages" ]; then
-                echo "$completed" > "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
+            else
+                tmp_file=$(mktemp "$CACHE_DIR/paru_completed_packages.XXXXXX")
+                echo "$completed" > "$tmp_file"
+                mv "$tmp_file" "$CACHE_DIR/paru_completed_packages"
             fi
 
             percent=$((completed * 100 / total))

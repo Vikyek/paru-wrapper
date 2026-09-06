@@ -434,8 +434,12 @@ if [ "$is_transaction" = true ]; then
             echo "$total_pkgs" | sudo -u "$SUDO_USER" tee "$CACHE_DIR/paru_total_packages" >/dev/null 2>&1 || true
             echo "0" | sudo -u "$SUDO_USER" tee "$CACHE_DIR/paru_completed_packages" >/dev/null 2>&1 || true
         else
-            [ ! -L "$CACHE_DIR/paru_total_packages" ] && echo "$total_pkgs" > "$CACHE_DIR/paru_total_packages" 2>/dev/null || true
-            [ ! -L "$CACHE_DIR/paru_completed_packages" ] && echo "0" > "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
+            tmp_total=$(mktemp "$CACHE_DIR/paru_total_packages.XXXXXX")
+            tmp_completed=$(mktemp "$CACHE_DIR/paru_completed_packages.XXXXXX")
+            echo "$total_pkgs" > "$tmp_total"
+            echo "0" > "$tmp_completed"
+            mv "$tmp_total" "$CACHE_DIR/paru_total_packages"
+            mv "$tmp_completed" "$CACHE_DIR/paru_completed_packages"
         fi
     else
         rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true

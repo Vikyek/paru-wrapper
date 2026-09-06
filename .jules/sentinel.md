@@ -38,3 +38,8 @@
 **Vulnerability:** Found a URL injection vulnerability in `update_mkvpkg_aur.py` where dynamic package names were inserted into an AUR RPC URL via string interpolation (`params = "&".join(f"arg[]={pkg}" for pkg in batch)`).
 **Learning:** Manual string interpolation for query parameters fails to URL-encode special characters. In Arch Linux, packages can contain characters like `+` (e.g., `gcc++`). If unencoded, the `+` is interpreted as a space by the server, causing logical bugs (e.g., retrieving `gcc  ` instead of `gcc++`) and allowing potential parameter injection.
 **Prevention:** Always use `urllib.parse.urlencode()` in Python to securely construct query strings when dealing with dynamic or potentially untrusted inputs.
+
+## 2024-09-06 - Mitigate TOCTOU vulnerabilities in Bash
+**Vulnerability:** Time-of-Check to Time-of-Use (TOCTOU) symlink creation when writing files using `[ ! -L file ] && echo > file`.
+**Learning:** Sequential check-and-write operations in bash are vulnerable because an attacker can create a symlink in the window between the check and the write.
+**Prevention:** To securely write files and prevent TOCTOU vulnerabilities, create a secure temporary file with `mktemp` and atomically rename it using `mv` (e.g., `tmp=$(mktemp); echo > "$tmp"; mv "$tmp" file`).
