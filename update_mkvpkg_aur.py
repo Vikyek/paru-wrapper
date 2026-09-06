@@ -99,14 +99,12 @@ def is_installed(pkg):
         except Exception:
             _installed_cache = set()
 
-    if _installed_cache:
+    # Optimization: Use `is not None` to prevent empty cache evaluation as False.
+    # When cache is evaluated as False, it erroneously falls back to N+1 subprocess queries.
+    if _installed_cache is not None:
         return pkg in _installed_cache
 
-    try:
-        res = subprocess.run(["pacman", "-Qq", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) # nosec
-        return res.returncode == 0
-    except FileNotFoundError:
-        return False
+    return False
 
 def get_mkvpkg_packages_and_versions():
     """

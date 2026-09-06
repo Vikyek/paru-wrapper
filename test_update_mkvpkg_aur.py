@@ -7,6 +7,10 @@ import update_mkvpkg_aur
 
 class TestUpdateMkvpkgAur(unittest.TestCase):
 
+    def setUp(self):
+        # Reset cache before each test
+        update_mkvpkg_aur._installed_cache = None
+
     @patch('update_mkvpkg_aur.subprocess.check_output')
     def test_run_cmd_success(self, mock_check_output):
         mock_check_output.return_value = "output\n"
@@ -44,14 +48,15 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
     @patch('update_mkvpkg_aur.subprocess.run')
     def test_is_installed_true(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_run.return_value = MagicMock(returncode=0, stdout="pkg\notherpkg\n")
         self.assertTrue(update_mkvpkg_aur.is_installed("pkg"))
-        mock_run.assert_called_once_with(["pacman", "-Qq", "pkg"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        mock_run.assert_called_once_with(["pacman", "-Qq"], capture_output=True, text=True, check=True)
 
     @patch('update_mkvpkg_aur.subprocess.run')
     def test_is_installed_false(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=1)
+        mock_run.return_value = MagicMock(returncode=0, stdout="otherpkg\n")
         self.assertFalse(update_mkvpkg_aur.is_installed("pkg"))
+        mock_run.assert_called_once_with(["pacman", "-Qq"], capture_output=True, text=True, check=True)
 
     @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
     @patch('update_mkvpkg_aur.run_cmd')
@@ -89,6 +94,7 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     def test_is_installed_file_not_found(self, mock_run):
         mock_run.side_effect = FileNotFoundError("Command not found")
         self.assertFalse(update_mkvpkg_aur.is_installed("pkg"))
+        mock_run.assert_called_once_with(["pacman", "-Qq"], capture_output=True, text=True, check=True)
 
     @patch('update_mkvpkg_aur.urllib.request.urlopen')
     def test_query_aur_success(self, mock_urlopen):
