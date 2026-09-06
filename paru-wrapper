@@ -53,7 +53,9 @@ purge_broken_clones() {
             ((cleaned++)) || true
         fi
     done
-    [[ $cleaned -gt 0 ]] && echo "[paru-wrapper] Cleaned $cleaned corrupted clone cache(s)." >&2
+    if [[ $cleaned -gt 0 ]]; then
+        echo "[paru-wrapper] Cleaned $cleaned corrupted clone cache(s)." >&2
+    fi
     return 0
 }
 
@@ -81,7 +83,7 @@ run_paru_with_clone_repair() {
                     fi
                 done
             fi
-            [[ "$repaired" == true ]] && continue
+            if [[ "$repaired" == true ]]; then continue; fi
         fi
         break
     done
