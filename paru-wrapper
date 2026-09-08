@@ -12,6 +12,10 @@ set -euo pipefail
 
 declare -gA _aur_pkgs_cache=()
 
+# Resolves the AUR package metadata in batched chunks.
+#
+# @param $@ - List of package names to query
+# @returns Populates global _aur_pkgs_cache associative array mapping names to versions
 fetch_aur_metadata_batch() {
     local pkgs=("$@")
     local chunk_size=50
