@@ -1,3 +1,6 @@
 ## 2024-05-24 - Pure-Python Version Comparisons
 **Learning:** Shelling out to `vercmp` for N+1 package version comparisons using `bash -c` is a massive performance bottleneck. However, `pkg_resources` or `packaging.version` cannot be used to compare Arch Linux package versions since PEP 440 fundamentally disagrees with ALPM (e.g. `1.0a` evaluates as older than `1.0` in ALPM).
 **Action:** Always use a custom pure-Python port of Pacman's `alpm_vercmp` (and `rpmvercmp`) logic for Arch package comparisons in Python scripts.
+## 2024-09-08 - Fast Command Output Processing in Bash
+**Learning:** Using `while read` loops to parse potentially large multi-line command output (like `pacman -Si` or `pacman -Sl`) in Bash scripts creates a severe bottleneck. Native string processing and looping in bash scale incredibly poorly (`O(N)` or `O(N*M)`) due to subprocess spawning and internal text processing overhead.
+**Action:** When filtering and caching large command outputs, offload the text processing and filtering to `awk`, and format the `awk` output to print `eval`-compatible associative array assignments. Then evaluate the entire block once using `eval "$(cmd | awk '...')"`. This converts an O(N) bash loop into an O(1) bulk evaluation, dropping parsing time from hundreds of milliseconds to under 5ms.

@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 post_install() {
     if [ -n "${SUDO_USER:-}" ]; then
         TARGET_USER="$SUDO_USER"
