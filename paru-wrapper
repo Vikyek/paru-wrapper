@@ -28,6 +28,10 @@ msg_warn() { echo -e "${C_WARN}[paru-wrapper] Warning:${C_RESET} $*" >&2; }
 
 declare -gA _aur_pkgs_cache=()
 
+# Resolves the AUR package metadata in batched chunks.
+#
+# @param $@ - List of package names to query
+# @returns Populates global _aur_pkgs_cache associative array mapping names to versions
 fetch_aur_metadata_batch() {
     local pkgs=("$@")
     local chunk_size=50
@@ -383,13 +387,14 @@ if [ "$is_transaction" = true ]; then
     done
 
     # Pre-cache official status for all target packages using a single pacman invocation
+    # Performance Optimization: Offload filtering to awk and populate cache via eval
+    # to eliminate slow O(N) bash while-read loop overhead.
     declare -A _official_pkgs_cache=()
     if [ ${#targets[@]} -gt 0 ]; then
-        while read -r name repo; do
-            if [[ -n "$repo" ]] && [[ "$repo" != "$PARU_WRAPPER_REPO" ]]; then
-                _official_pkgs_cache["$name"]=1
-            fi
-        done < <(LC_ALL=C pacman -Si "${targets[@]}" 2>/dev/null | awk -F '[ \t]*:[ \t]*' '/^Repository/ {r=$2} /^Name/ {print $2, r}')
+        eval "$(LC_ALL=C pacman -Si "${targets[@]}" 2>/dev/null | awk -F '[ \t]*:[ \t]*' -v repo="$PARU_WRAPPER_REPO" '
+            /^Repository/ { r=$2 }
+            /^Name/ { if (r != "" && r != repo) printf "_official_pkgs_cache[\"%s\"]=1\n", $2 }
+        ')"
     fi
 
     # Helper to check if package is in official repos
@@ -482,8 +487,16 @@ if [ "$is_transaction" = true ]; then
     # Write total packages to paru_total_packages for progress counter
     if [[ -n "$upgrades" ]]; then
         total_pkgs=$(echo "$upgrades" | grep -v "^$" | grep -c "")
-        echo "$total_pkgs" > "$CACHE_DIR/paru_total_packages"
-        echo "0" > "$CACHE_DIR/paru_completed_packages"
+        tmp_total=$(mktemp "$CACHE_DIR/paru_total_packages.XXXXXX" 2>/dev/null || true)
+        if [ -n "$tmp_total" ]; then
+            echo "$total_pkgs" > "$tmp_total"
+            mv -f "$tmp_total" "$CACHE_DIR/paru_total_packages"
+        fi
+        tmp_comp=$(mktemp "$CACHE_DIR/paru_completed_packages.XXXXXX" 2>/dev/null || true)
+        if [ -n "$tmp_comp" ]; then
+            echo "0" > "$tmp_comp"
+            mv -f "$tmp_comp" "$CACHE_DIR/paru_completed_packages"
+        fi
     else
         rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
     fi
@@ -496,13 +509,13 @@ if [ "$is_transaction" = true ]; then
         new_deps=""
         if [[ -n "$upgrades" ]]; then
             # Query pacman sync database for repository packages dependencies
-            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | grep -iE '^(Depends On|Depends)[[:space:]]*:' | cut -d: -f2- | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
+            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | awk '/^(Depends On|Depends)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
             
             # Query AUR RPC (or paru info) for AUR package dependencies
             aur_deps=""
             aur_upgrades=$(echo "$upgrades" | grep -vFf <(pacman -Slq 2>/dev/null) || true)
             if [[ -n "$aur_upgrades" ]]; then
-                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru -Si 2>/dev/null | grep -iE '^(Depends On|Depends)[[:space:]]*:' | cut -d: -f2- | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
+                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru -Si 2>/dev/null | awk '/^(Depends On|Depends)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
             fi
 
             new_deps=$(echo -e "${repo_deps}\n${aur_deps}" | sort -u)
