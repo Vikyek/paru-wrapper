@@ -487,8 +487,16 @@ if [ "$is_transaction" = true ]; then
     # Write total packages to paru_total_packages for progress counter
     if [[ -n "$upgrades" ]]; then
         total_pkgs=$(echo "$upgrades" | grep -v "^$" | grep -c "")
-        echo "$total_pkgs" > "$CACHE_DIR/paru_total_packages"
-        echo "0" > "$CACHE_DIR/paru_completed_packages"
+        tmp_total=$(mktemp "$CACHE_DIR/paru_total_packages.XXXXXX" 2>/dev/null || true)
+        if [ -n "$tmp_total" ]; then
+            echo "$total_pkgs" > "$tmp_total"
+            mv -f "$tmp_total" "$CACHE_DIR/paru_total_packages"
+        fi
+        tmp_comp=$(mktemp "$CACHE_DIR/paru_completed_packages.XXXXXX" 2>/dev/null || true)
+        if [ -n "$tmp_comp" ]; then
+            echo "0" > "$tmp_comp"
+            mv -f "$tmp_comp" "$CACHE_DIR/paru_completed_packages"
+        fi
     else
         rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
     fi
