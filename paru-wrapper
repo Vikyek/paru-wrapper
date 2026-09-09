@@ -387,13 +387,14 @@ if [ "$is_transaction" = true ]; then
     done
 
     # Pre-cache official status for all target packages using a single pacman invocation
+    # Performance Optimization: Offload filtering to awk and populate cache via eval
+    # to eliminate slow O(N) bash while-read loop overhead.
     declare -A _official_pkgs_cache=()
     if [ ${#targets[@]} -gt 0 ]; then
-        while read -r name repo; do
-            if [[ -n "$repo" ]] && [[ "$repo" != "$PARU_WRAPPER_REPO" ]]; then
-                _official_pkgs_cache["$name"]=1
-            fi
-        done < <(LC_ALL=C pacman -Si "${targets[@]}" 2>/dev/null | awk -F '[ \t]*:[ \t]*' '/^Repository/ {r=$2} /^Name/ {print $2, r}')
+        eval "$(LC_ALL=C pacman -Si "${targets[@]}" 2>/dev/null | awk -F '[ \t]*:[ \t]*' -v repo="$PARU_WRAPPER_REPO" '
+            /^Repository/ { r=$2 }
+            /^Name/ { if (r != "" && r != repo) printf "_official_pkgs_cache[\"%s\"]=1\n", $2 }
+        ')"
     fi
 
     # Helper to check if package is in official repos
