@@ -31,6 +31,12 @@ def run_cmd(cmd):
         return ""
 
 def parse_evr(evr: str):
+    """
+    Parses an Epoch:Version-Release (EVR) string into its components.
+
+    @param evr - The version string to parse (e.g. '1:1.0-2')
+    @returns A tuple of (epoch, version, release)
+    """
     s = 0
     while s < len(evr) and evr[s].isdigit(): s += 1
     se = evr.rfind('-')
@@ -44,6 +50,13 @@ def parse_evr(evr: str):
     return epoch, evr[version_start:], None
 
 def rpmvercmp(a: str, b: str) -> int:
+    """
+    Compares two RPM-style version strings.
+
+    @param a - First version string
+    @param b - Second version string
+    @returns 1 if a > b, -1 if a < b, 0 if a == b
+    """
     a, b = str(a), str(b)
     if a == b: return 0
     p1, p2, l1, l2 = 0, 0, len(a), len(b)
@@ -71,6 +84,14 @@ def rpmvercmp(a: str, b: str) -> int:
     return 1
 
 def alpm_vercmp(a: str, b: str) -> int:
+    """
+    Compares two ALPM (Arch Linux Package Management) version strings.
+    Handles epoch, version, and release components correctly.
+
+    @param a - First version string
+    @param b - Second version string
+    @returns 1 if a > b, -1 if a < b, 0 if a == b
+    """
     if a == b: return 0
     if not a or not b: return -1 if not a else 1
     e1, v1, r1 = parse_evr(a)
