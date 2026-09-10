@@ -314,10 +314,16 @@ if [ "$is_transaction" = true ]; then
             mapfile -t new_pkgs < <(find "$REPO_DIR" -name "*.pkg.tar.zst" -newer "$start_marker" 2>/dev/null || true)
             if [ ${#new_pkgs[@]} -gt 0 ]; then
                 filtered_new_pkgs=()
+
+                # Performance Optimization: Cache installed packages to avoid O(N) subshell overhead
+                local installed_pkgs
+                installed_pkgs=$(pacman -Qq 2>/dev/null || true)
+                local padded_installed=$'\n'"$installed_pkgs"$'\n'
+
                 for pkg_file in "${new_pkgs[@]}"; do
                     pkg_base=$(basename "$pkg_file")
                     pkg_name=$(echo "$pkg_base" | sed -E 's/-[0-9].*//')
-                    if [[ ! "$pkg_name" =~ -git$ ]] && pacman -Qq "${pkg_name}-git" >/dev/null 2>&1; then
+                    if [[ ! "$pkg_name" =~ -git$ ]] && [[ "$padded_installed" == *$'\n'"${pkg_name}-git"$'\n'* ]]; then
                         msg_info "Skipping auto-indexing of '$pkg_base' because installed '${pkg_name}-git' takes priority."
                         rm -f "$pkg_file" 2>/dev/null || true
                     else
