@@ -4,3 +4,6 @@
 ## 2024-09-08 - Fast Command Output Processing in Bash
 **Learning:** Using `while read` loops to parse potentially large multi-line command output (like `pacman -Si` or `pacman -Sl`) in Bash scripts creates a severe bottleneck. Native string processing and looping in bash scale incredibly poorly (`O(N)` or `O(N*M)`) due to subprocess spawning and internal text processing overhead.
 **Action:** When filtering and caching large command outputs, offload the text processing and filtering to `awk`, and format the `awk` output to print `eval`-compatible associative array assignments. Then evaluate the entire block once using `eval "$(cmd | awk '...')"`. This converts an O(N) bash loop into an O(1) bulk evaluation, dropping parsing time from hundreds of milliseconds to under 5ms.
+## 2024-09-11 - Bulk Querying `pacman -Qq` Output for Faster Lookups
+**Learning:** Using `pacman -Qq` repeatedly inside a bash loop (N+1 queries) creates a massive performance bottleneck. For moderately sized lists like installed packages, querying once and doing native padded string matching `[[ "$padded" == *$'\n'"$pkg"$'\n'* ]]` dramatically speeds up bash processing over executing the subprocess `M` times.
+**Action:** Always batch pacman queries and use native bash pattern matching with padded newlines for $O(N)$ string matching instead of loop subshells.
