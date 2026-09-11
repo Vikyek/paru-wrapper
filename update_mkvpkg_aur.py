@@ -133,16 +133,18 @@ def get_mkvpkg_packages_and_versions():
 
 import http.client
 
-def query_aur(packages):
+def query_aur(packages, chunk_size=50):
     """
     Resolves the AUR package metadata in batched chunks to prevent URL length limits.
 
     @param packages - List of package names to query
+    @param chunk_size - Maximum batch limit (default: 50)
     @returns Dictionary of package names to version strings
+    @raises RuntimeError - When the remote RPC endpoint cannot be reached
     """
     results = {}
-    for i in range(0, len(packages), 50):
-        batch = packages[i:i+50]
+    for i in range(0, len(packages), chunk_size):
+        batch = packages[i:i+chunk_size]
         query_args = [('v', '5'), ('type', 'info')]
         for pkg in batch:
             query_args.append(('arg[]', pkg))
