@@ -191,6 +191,8 @@ def main():
 
     aur_versions = query_aur(unmodified_pkgs)
     pkgs_to_remove = []
+    # Collect data for public packages to remove to avoid console spam
+    public_pkgs_to_remove_info = []
 
     # Priority Check: If a non-git package exists in repo but a -git variant is installed,
     # auto-remove the non-git package to prevent conflicts and prioritize VCS versions.
@@ -221,8 +223,13 @@ def main():
                     else:
                         sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade.\n")
                 else:
-                    sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of public package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade...\n")
+                    public_pkgs_to_remove_info.append((pkg, aur_ver, local_ver))
                     pkgs_to_remove.append(pkg)
+
+    if public_pkgs_to_remove_info:
+        sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} Newer versions found for {len(public_pkgs_to_remove_info)} public package(s) in AUR. Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade:\n")
+        for p, a_ver, l_ver in public_pkgs_to_remove_info:
+            sys.stderr.write(f"  -> {c_bold}{p}{c_reset} (local: {c_bold}{l_ver}{c_reset} -> AUR: {c_bold}{a_ver}{c_reset})\n")
 
     # Optimization: Batch repo-remove operations to reduce subprocess overhead
     if pkgs_to_remove:
