@@ -71,6 +71,13 @@ def rpmvercmp(a: str, b: str) -> int:
     return 1
 
 def alpm_vercmp(a: str, b: str) -> int:
+    """
+    Compares two ALPM package version strings.
+
+    @param a - The first version string
+    @param b - The second version string
+    @returns Negative if a < b, positive if a > b, 0 if equal
+    """
     if a == b: return 0
     if not a or not b: return -1 if not a else 1
     e1, v1, r1 = parse_evr(a)
