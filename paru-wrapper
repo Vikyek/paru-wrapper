@@ -289,10 +289,10 @@ if [ "$is_transaction" = true ]; then
     if [ "$is_anneal" = true ] || [ "${FORCE_REBUILD:-0}" = "1" ]; then
         # Disable selected hooks to prevent snapper/completion/rebuild-check spam during intermediate package installations
         msg_info "Temporarily disabling redundant hooks..."
-        sudo ln -sf /dev/null /etc/pacman.d/hooks/05-snap-pac-pre.hook
-        sudo ln -sf /dev/null /etc/pacman.d/hooks/zz-snap-pac-post.hook
-        sudo ln -sf /dev/null /etc/pacman.d/hooks/paru-completion-update.hook
-        sudo ln -sf /dev/null /etc/pacman.d/hooks/rebuild-check.hook
+        sudo ln -sf -T /dev/null /etc/pacman.d/hooks/05-snap-pac-pre.hook
+        sudo ln -sf -T /dev/null /etc/pacman.d/hooks/zz-snap-pac-post.hook
+        sudo ln -sf -T /dev/null /etc/pacman.d/hooks/paru-completion-update.hook
+        sudo ln -sf -T /dev/null /etc/pacman.d/hooks/rebuild-check.hook
         hooks_disabled=true
     fi
 

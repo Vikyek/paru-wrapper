@@ -14,7 +14,7 @@ post_install() {
     else
         mkdir -p "${TARGET_HOME}/.local/bin"
     fi
-    ln -sf /usr/bin/paru-wrapper "${TARGET_HOME}/.local/bin/paru"
+    ln -sf -T /usr/bin/paru-wrapper "${TARGET_HOME}/.local/bin/paru"
 
     if [ -n "${TARGET_USER:-}" ]; then
         chown -h "${TARGET_USER}:${TARGET_USER}" "${TARGET_HOME}/.local/bin/paru" 2>/dev/null || true
