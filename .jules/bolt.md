@@ -4,3 +4,6 @@
 ## 2024-09-08 - Fast Command Output Processing in Bash
 **Learning:** Using `while read` loops to parse potentially large multi-line command output (like `pacman -Si` or `pacman -Sl`) in Bash scripts creates a severe bottleneck. Native string processing and looping in bash scale incredibly poorly (`O(N)` or `O(N*M)`) due to subprocess spawning and internal text processing overhead.
 **Action:** When filtering and caching large command outputs, offload the text processing and filtering to `awk`, and format the `awk` output to print `eval`-compatible associative array assignments. Then evaluate the entire block once using `eval "$(cmd | awk '...')"`. This converts an O(N) bash loop into an O(1) bulk evaluation, dropping parsing time from hundreds of milliseconds to under 5ms.
+## 2024-09-13 - Evaluating JSON Output Securely in Bash
+**Learning:** When refactoring slow bash `while read` loops to use `jq` and `eval` for bulk associative array assignments, passing raw unescaped JSON strings (even from trusted APIs like AUR) directly into an `eval` payload creates a Critical Remote Code Execution (RCE) vulnerability.
+**Action:** Always use `jq`'s `@sh` formatter (e.g., `\(.Name | @sh)`) to securely escape all dynamic string interpolations before passing the resulting format block to `eval`.
