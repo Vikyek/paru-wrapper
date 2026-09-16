@@ -42,3 +42,7 @@
 **Vulnerability:** TOCTOU (Time-of-Check to Time-of-Use) symlink overwrite vulnerability when writing files to cache directories.
 **Learning:** Using `[ ! -L file ]` or conditionally recreating a file before directly redirecting output (`echo > file`) still leaves a race condition window open before the shell's `open()` call. This allows an attacker to plant a symlink and overwrite arbitrary files.
 **Prevention:** Securely create a temporary file using `mktemp`, verify it is not empty (`[ -n "$tmp" ]`), write to it, and atomically replace the target using `mv -f`.
+## 2024-10-24 - TOCTOU Symlink Directory Overwrite via Missing -T Flag
+**Vulnerability:** Found a TOCTOU directory symlink vulnerability where `mv -f` and `ln -sf` were used without the `-T` flag when updating cache files and hooks.
+**Learning:** Even when using `mktemp` and `mv -f` to atomically replace a file, if an attacker creates a symlink pointing to a directory at the target location, `mv -f` will move the temporary file *into* the target directory instead of replacing the symlink. The same applies to `ln -sf`.
+**Prevention:** Always use the `-T` (`--no-target-directory`) flag with `mv -f` (e.g., `mv -f -T "$tmp" target`) and `ln -sf` (e.g., `ln -sf -T source target`) to ensure atomic replacement of the destination path itself, regardless of whether it is a directory symlink.
