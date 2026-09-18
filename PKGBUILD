@@ -6,7 +6,10 @@ pkgdesc="A wrapper around paru that implements dependency-aware orphan cleaning 
 arch=('any')
 url="https://github.com/Vikyek/paru-wrapper"
 license=('GPL-3.0-only')
-depends=('paru' 'bash' 'sudo' 'python' 'jq' 'curl' 'git')
+depends=('paru' 'sudo' 'python' 'git' 'bash')
+optdepends=('snapper: Support for automatic pre/post transaction snapshots'
+            'rebuild-check: Check for packages needing a rebuild after an update'
+            'anneal: Automatic rebuilds for failed packages')
 install=paru-wrapper.install
 source=(
     "paru-wrapper"
