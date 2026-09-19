@@ -192,16 +192,23 @@ def main():
     aur_versions = query_aur(unmodified_pkgs)
     pkgs_to_remove = []
 
+    vcs_replacements = []
+    auto_upgrading = []
+    skipping = []
+    public_upgrades = []
+
     # Priority Check: If a non-git package exists in repo but a -git variant is installed,
     # auto-remove the non-git package to prevent conflicts and prioritize VCS versions.
     for pkg in unmodified_pkgs:
         if not pkg.endswith("-git"):
             if is_installed(f"{pkg}-git"):
-                sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Installed VCS package '{c_bold}{pkg}-git{c_reset}' takes priority over non-git '{c_bold}{pkg}{c_reset}' in {repo_name}. Removing non-git package...\n")
+                vcs_replacements.append(pkg)
                 pkgs_to_remove.append(pkg)
 
     # Optimization: Use pure-Python alpm_vercmp to avoid subprocess overhead entirely
     for pkg in unmodified_pkgs:
+        if pkg in vcs_replacements:
+            continue
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
@@ -216,13 +223,33 @@ def main():
             if res > 0:
                 if is_installed(pkg):
                     if auto_update_installed:
-                        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
+                        auto_upgrading.append((pkg, local_ver, aur_ver))
                         pkgs_to_remove.append(pkg)
                     else:
-                        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade.\n")
+                        skipping.append((pkg, local_ver, aur_ver))
                 else:
-                    sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of public package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade...\n")
+                    public_upgrades.append((pkg, local_ver, aur_ver))
                     pkgs_to_remove.append(pkg)
+
+    if vcs_replacements:
+        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Installed VCS packages take priority over non-git variants in {c_bold}{repo_name}{c_reset}. Removing non-git packages:\n")
+        for pkg in vcs_replacements:
+            sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset}\n")
+
+    if auto_upgrading:
+        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer versions found in AUR for installed packages. Auto-upgrading:\n")
+        for pkg, local_ver, aur_ver in auto_upgrading:
+            sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset} ({local_ver} -> {c_bold}{aur_ver}{c_reset})\n")
+
+    if skipping:
+        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer versions found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade:\n")
+        for pkg, local_ver, aur_ver in skipping:
+            sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset} ({local_ver} -> {c_bold}{aur_ver}{c_reset})\n")
+
+    if public_upgrades:
+        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer versions found in AUR for public packages. Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade:\n")
+        for pkg, local_ver, aur_ver in public_upgrades:
+            sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset} ({local_ver} -> {c_bold}{aur_ver}{c_reset})\n")
 
     # Optimization: Batch repo-remove operations to reduce subprocess overhead
     if pkgs_to_remove:
