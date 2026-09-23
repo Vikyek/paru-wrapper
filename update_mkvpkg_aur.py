@@ -71,6 +71,13 @@ def rpmvercmp(a: str, b: str) -> int:
     return 1
 
 def alpm_vercmp(a: str, b: str) -> int:
+    """
+    Compares two Arch Linux package version strings (ALPM format).
+
+    @param a - The first version string to compare
+    @param b - The second version string to compare
+    @returns -1 if a < b, 0 if a == b, and 1 if a > b
+    """
     if a == b: return 0
     if not a or not b: return -1 if not a else 1
     e1, v1, r1 = parse_evr(a)
