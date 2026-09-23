@@ -1,97 +1,154 @@
-# paru-wrapper
+# paru-wrapper (v1.1.0)
 
-A wrapper around `paru` that automates dependency-aware orphaned package cleaning and registers newly built packages directly into a local repository database.
+A power-user wrapper for `paru` and `pacman` designed to manage local custom AUR
+repositories (`mkvpkg`), automate package database synchronization, and provide
+seamless, system-wide migration to development (`-git`) packages.
 
-## Features
+---
 
-- **Automatic Repository DB Registration:** Detects packages compiled during `paru` upgrades and registers them directly in the custom repository database.
-- **Orphan Preservation & Cleaning:** Before upgrades, automatically checks for orphaned packages. It preserves orphans that will be needed as dependencies of packages being upgraded, and cleans the remainder.
-- **System Integration:** Installs a wrapper binary to `/usr/bin/paru-wrapper` and overrides normal `paru` invocations for the local user by placing a symlink at `~/.local/bin/paru`.
-- **agy-syncvault Integration:** Triggers the private configuration vault background sync script (`auto_sync_vault.py`) automatically after a successful transaction.
+## Features & Capabilities
 
-## Installation
+- **Gittinator Engine (`paru --gittinator`):** Scans all explicitly installed,
+  non-VCS packages on your system (`pacman -Qqe`), queries the official Arch
+  User Repository (AUR) RPC API in optimal batches of 50 candidates, identifies
+  existing `-git` counterparts, prompts to replace them, and triggers a full
+  system update with `--devel` enabled.
+- **Automated Local AUR Synchronization (`mkvpkg`):** Intercepts package
+  management commands to trigger `update_mkvpkg_aur.py`. It checks if newer
+  versions of your locally built custom packages exist in the AUR, auto-upgrades
+  installed packages when configured, and manages repository cleanup (e.g.,
+  removing non-git packages when `-git` variants take priority).
+- **Dual Wrapper Suite:** Bundles both `paru-wrapper` and `pacman-wrapper` to
+  ensure consistent execution, hook firing, and local database alignment
+  regardless of whether you invoke `paru` or `pacman`.
+- **Transparent Pass-Through:** Any standard flags or subcommands not explicitly
+  intercepted by wrapper hooks are passed directly to `/usr/bin/paru` or
+  `/usr/bin/pacman`.
 
-Install using standard Arch packaging:
+---
 
-```bash
-makepkg -si
+## Repository Structure
+
+```
+paru-wrapper/
+├── paru-wrapper             # Main entry point script for paru operations
+├── pacman-wrapper           # Secondary wrapper for direct pacman calls
+├── update_mkvpkg_aur.py     # Python engine for local repo sync & version checks
+├── test_update_mkvpkg_aur.py# Unit test suite for version comparison & repo logic
+├── install.sh               # Standalone shell installer
+├── Makefile                 # GNU Make build targets
+├── PKGBUILD                 # Arch Linux package build recipe
+└── .SRCINFO                 # Generated package metadata
 ```
 
-## Manual Installation
+---
 
-You can install manually using the provided `Makefile`:
+## Dependencies
 
-```bash
-make install
-```
+### Runtime
 
-Or run the automated installation script:
+- `paru` – Upstream AUR helper
+- `pacman` – Arch Linux package manager
+- `python` – For running `update_mkvpkg_aur.py`
+- `curl` – AUR RPC API queries
+- `jq` – JSON parsing for API responses
+- `bash` – Shell script execution environment
 
-```bash
+### Build & Installation
+
+- `base-devel` / `make` – System build tools
+- `git` – Source control management
+
+---
+
+## Environment Variables
+
+`paru-wrapper` respects environment variables to customize runtime behavior:
+
+| Variable                             | Default | Purpose                                                                                                                                                  |
+| :----------------------------------- | :------ | :------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PARU_WRAPPER_AUTO_UPDATE_INSTALLED` | `1`     | Automatically upgrades local `mkvpkg` packages when a newer version is found in the AUR. Set to `0` to disable automatic upgrades and only log warnings. |
+
+---
+
+## Installation Methods
+
+### 1. Repository Shell Script
+
+Direct installation for local development:
+
+```fish
 ./install.sh
 ```
 
-## Configuration
+### 2. GNU Make Target
 
-The wrapper makes several path assumptions by default. These can be configured with environment variables:
+Install to system-wide or custom binary paths:
 
-- PARU_WRAPPER_REPO — directory where built packages are stored (default: /mnt/v/Data/makepkg/packages)
-- PARU_WRAPPER_REPO_DB — repository database path (default: $PARU_WRAPPER_REPO/custom.db.tar.gz)
-- PARU_WRAPPER_PROJECTS_DIR — directory with local package sources (default: $HOME/src)
-- PARU_WRAPPER_DRY_RUN — if "true", the wrapper will not perform destructive changes
-- PARU_WRAPPER_AUTO_UPDATE_INSTALLED — if "true" (default), automatically upgrades installed packages when repository sync detects newer versions
+```fish
+# Install to /usr/local/bin (default)
+sudo make install
 
-Example:
-```bash
-export PARU_WRAPPER_REPO=/var/cache/makepkg/packages
-export PARU_WRAPPER_PROJECTS_DIR="$HOME/src"
-/usr/bin/paru-wrapper --dry-run -Syu
+# Install to user home directory
+make PREFIX=$HOME/.local install
 ```
 
-## Usage & Examples
+### 3. Native Arch Package
 
-Build and install via makepkg:
-```bash
+Build and install via `makepkg`:
+
+```fish
 makepkg -si
 ```
 
-Or use the bundled installer:
-```bash
-./install.sh
+---
+
+## Usage Examples
+
+### Bulk Convert Installed Packages to `-git` Versions
+
+To migrate stable installed packages to their AUR `-git` counterparts and pull
+latest upstream commits:
+
+```fish
+paru --gittinator
 ```
 
-Run a normal upgrade (wrapper will run automatically if you installed the symlink):
-```bash
+### Standard AUR & System Operations
+
+All standard `paru` subcommands work identically, with local repository hooks
+firing transparently:
+
+```fish
+# Perform system update with local repo checks
 paru -Syu
-# or directly
-/usr/bin/paru-wrapper -Syu
+
+# Install or build a package
+paru -S package-name
+
+# Remove a package
+paru -R package-name
 ```
 
-Dry-run example (shows what would be removed/updated without performing actions):
-```bash
-PARU_WRAPPER_DRY_RUN=true /usr/bin/paru-wrapper --dry-run -Syu
+---
+
+## Testing & Maintenance
+
+Before committing changes or bumping release versions, run the unit test suite
+to verify version comparison routines, package priority rules, and local
+repository management logic:
+
+```fish
+# Run unit tests directly via Python
+python3 test_update_mkvpkg_aur.py
+
+# Or via Makefile target
+make test
 ```
 
-## Safety & Permissions
+To update release manifests after modifying `PKGBUILD`:
 
-This wrapper calls the following commands which may modify your system:
-- sudo pacman -Rns --noconfirm (removes orphaned packages)
-- repo-add -R -w (updates repository DB and may remove old package files)
-- makepkg -sfi (builds and may install local packages)
-
-Be careful: automatic removals are performed without interactive confirmation when not in dry-run mode. Use --dry-run or set PARU_WRAPPER_DRY_RUN=true to preview actions.
-
-## Troubleshooting
-
-- If repo-add fails due to locks, wait for other package tools to finish or retry.
-- If local package rebuilds are not found, ensure PARU_WRAPPER_PROJECTS_DIR contains the package directory with a PKGBUILD.
-- If AUR RPC checks fail (network issues), the wrapper will warn; rerun with network access.
-
-## Contributing
-
-Please open issues/PRs to report bugs or improve configurability. The project prefers changes that avoid hard-coded user or path names; use environment variables instead.
-
-## License
-
-Distributed under the GNU General Public License v3.0 (GPL-3.0). See [LICENSE](LICENSE) for details.
+```fish
+makepkg --printsrcinfo > .SRCINFO
+```
 

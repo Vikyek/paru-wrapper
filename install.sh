@@ -4,7 +4,7 @@
 set -e
 
 echo "Installing paru-wrapper via makepkg..."
-makepkg -si --noconfirm
+makepkg -Ccfsi --noconfirm
 
 echo "Successfully installed paru-wrapper!"
 
