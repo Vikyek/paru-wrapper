@@ -1,105 +1,32 @@
 #!/usr/bin/env bash
+set -uo pipefail
 
-set -eo pipefail
+SCRIPT_DIR=$(
+    CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" &&
+        pwd
+)
 
-REAL_PARU="/usr/bin/paru"
-GITTINATOR=0
-HAS_NOCONFIRM=0
-CLEAN_ARGS=()
-NO_NOCONFIRM_ARGS=()
+IMPLEMENTATION="${SCRIPT_DIR}/paru-wrapper-gittinator-impl"
 
-# ------------------------------------------------------------------------------
-# 1. Argument Parsing & Flag Interception
-# ------------------------------------------------------------------------------
+if [[ ! -x "$IMPLEMENTATION" ]]; then
+    echo "[paru-wrapper] Error: missing Gittinator implementation: $IMPLEMENTATION" >&2
+    exit 1
+fi
+
+NONINTERACTIVE=false
+
 for arg in "$@"; do
-    case "$arg" in
-        --gittinator)
-            GITTINATOR=1
-            ;;
-        --noconfirm)
-            HAS_NOCONFIRM=1
-            CLEAN_ARGS+=("$arg")
-            ;;
-        *)
-            CLEAN_ARGS+=("$arg")
-            NO_NOCONFIRM_ARGS+=("$arg")
-            ;;
-    esac
+    if [[ "$arg" == "--noconfirm" ]]; then
+        NONINTERACTIVE=true
+        break
+    fi
 done
 
-# Re-assign positional arguments with --gittinator stripped
-set -- "${CLEAN_ARGS[@]}"
-
-# ------------------------------------------------------------------------------
-# 2. Gittinator Mode Execution
-# ------------------------------------------------------------------------------
-if [[ $GITTINATOR -eq 1 ]]; then
-    echo "=========================================================="
-    echo "        --- GITTINATOR MODE ACTIVATED ---                 "
-    echo "   Converting installed packages to -git AUR variants     "
-    echo "=========================================================="
-    echo ""
-
-    echo "--> Scanning explicitly installed packages..."
-    INSTALLED_PKGS=$(pacman -Qqe | grep -vE '\-(git|svn|hg|bzr)$' || true)
-
-    if [[ -n "$INSTALLED_PKGS" ]]; then
-        CANDIDATES=()
-        for pkg in $INSTALLED_PKGS; do
-            CANDIDATES+=("${pkg}-git")
-        done
-
-        echo "--> Querying AUR API for available -git counterparts..."
-        FOUND_GIT_PKGS=()
-        BATCH_SIZE=50
-
-        for ((i=0; i<${#CANDIDATES[@]}; i+=BATCH_SIZE)); do
-            BATCH=("${CANDIDATES[@]:i:BATCH_SIZE}")
-            URL_PARAMS=""
-            for candidate in "${BATCH[@]}"; do
-                URL_PARAMS+="&arg[]=${candidate}"
-            done
-
-            RESPONSE=$(curl -s "https://aur.archlinux.org/rpc/v5/info?${URL_PARAMS}")
-            MATCHES=$(echo "$RESPONSE" | jq -r '.results[].Name' 2>/dev/null || true)
-
-            for match in $MATCHES; do
-                if [[ -n "$match" && "$match" != "null" ]]; then
-                    FOUND_GIT_PKGS+=("$match")
-                fi
-            done
-        done
-
-        if [[ ${#FOUND_GIT_PKGS[@]} -gt 0 ]]; then
-            echo ""
-            echo "Found ${#FOUND_GIT_PKGS[@]} -git package replacements in AUR:"
-            for pkg in "${FOUND_GIT_PKGS[@]}"; do
-                echo "  * ${pkg}"
-            done
-            echo ""
-
-            # Pacman's --noconfirm defaults to "N" on conflict prompts (Remove pkg? [y/N]).
-            # When --noconfirm is passed, strip it and pipe 'yes' to auto-accept package removals.
-            if [[ $HAS_NOCONFIRM -eq 1 ]]; then
-                yes | "$REAL_PARU" -S --needed "${FOUND_GIT_PKGS[@]}" "${NO_NOCONFIRM_ARGS[@]}"
-            else
-                "$REAL_PARU" -S --needed "${FOUND_GIT_PKGS[@]}" "$@"
-            fi
-        else
-            echo "No -git counterparts found in AUR for installed packages."
-        fi
-    fi
-
-    echo ""
-    echo "--> Running full system update with VCS tracking (--devel)..."
-    exec "$REAL_PARU" -Syu --devel --needed "$@"
+if [[ "$NONINTERACTIVE" == true ]]; then
+    set +e
+    yes "" | "$IMPLEMENTATION" "$@"
+    implementation_status=${PIPESTATUS[1]}
+    exit "$implementation_status"
 fi
 
-# ------------------------------------------------------------------------------
-# 3. Existing Wrapper Execution Pipeline
-# ------------------------------------------------------------------------------
-if [[ -f "$(dirname "$0")/update_mkvpkg_aur.py" ]]; then
-    python3 "$(dirname "$0")/update_mkvpkg_aur.py" "$@" || true
-fi
-
-exec "$REAL_PARU" "$@"
+exec "$IMPLEMENTATION" "$@"

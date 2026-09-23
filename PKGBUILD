@@ -1,7 +1,7 @@
 # Maintainer: Vikyek
 
 pkgname=paru-wrapper
-pkgver=1.1.1
+pkgver=1.1.2
 pkgrel=1
 pkgdesc="Custom paru wrapper providing automatic local AUR repo management and --gittinator VCS migrations"
 arch=('any')
@@ -31,6 +31,7 @@ package() {
 
     install -Dm755 paru-wrapper "${pkgdir}/usr/bin/paru-wrapper"
     install -Dm755 paru-wrapper-gittinator "${pkgdir}/usr/lib/paru-wrapper/paru-wrapper-gittinator"
+    install -Dm755 paru-wrapper-gittinator-impl "${pkgdir}/usr/lib/paru-wrapper/paru-wrapper-gittinator-impl"
     install -Dm755 pacman-wrapper "${pkgdir}/usr/bin/pacman-wrapper"
     install -Dm755 update_mkvpkg_aur.py "${pkgdir}/usr/bin/update_mkvpkg_aur.py"
     install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
