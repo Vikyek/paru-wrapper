@@ -10,6 +10,26 @@
 
 set -euo pipefail
 
+# Dispatch the custom Gittinator mode before normal paru processing.
+for arg in "$@"; do
+    if [[ "$arg" == "--gittinator" ]]; then
+        gittinator_helper="/usr/lib/paru-wrapper/paru-wrapper-gittinator"
+
+        if [[ ! -x "$gittinator_helper" ]]; then
+            local_helper="$(dirname "$(readlink -f "$0")")/paru-wrapper-gittinator"
+
+            if [[ -x "$local_helper" ]]; then
+                gittinator_helper="$local_helper"
+            else
+                echo "[paru-wrapper] Error: Gittinator helper is not installed." >&2
+                exit 1
+            fi
+        fi
+
+        exec "$gittinator_helper" "$@"
+    fi
+done
+
 if [ -z "${NO_COLOR:-}" ] && [ -t 2 ]; then
     C_INFO='\e[1;34m'
     C_WARN='\e[1;33m'
