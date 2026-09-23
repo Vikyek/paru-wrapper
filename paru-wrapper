@@ -69,11 +69,7 @@ fetch_aur_metadata_batch() {
 
         curl_out=$(curl -s -f -G "https://aur.archlinux.org/rpc/v5/info" "${query_args[@]}" 2>/dev/null) || continue
 
-        while IFS=$'\t' read -r name version; do
-            if [[ -n "$name" && "$name" != "null" ]]; then
-                _aur_pkgs_cache["$name"]="$version"
-            fi
-        done < <(echo "$curl_out" | jq -r '.results[]? | "\(.Name)\t\(.Version)"' 2>/dev/null)
+        eval "$(echo "$curl_out" | jq -r '.results[]? | select(.Name != null and .Name != "") | "_aur_pkgs_cache[\(.Name | @sh)]=\(.Version | @sh)"' 2>/dev/null)"
     done
 }
 
