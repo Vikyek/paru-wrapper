@@ -1,7 +1,7 @@
 pkgbase = paru-wrapper
-	pkgdesc = A wrapper around paru that implements dependency-aware orphan cleaning and automatic local repository DB updates
-	pkgver = 1.0.0
-	pkgrel = 7
+	pkgdesc = Custom paru wrapper providing automatic local AUR repo management and --gittinator VCS migrations
+	pkgver = 1.1.1
+	pkgrel = 1
 	url = https://github.com/Vikyek/paru-wrapper
 	install = paru-wrapper.install
 	arch = any
@@ -13,13 +13,7 @@ pkgbase = paru-wrapper
 	depends = jq
 	depends = curl
 	depends = git
-	source = paru-wrapper
-	source = update_mkvpkg_aur.py
-	source = pacman-wrapper
-	source = LICENSE
-	sha256sums = SKIP
-	sha256sums = SKIP
-	sha256sums = SKIP
+	source = paru-wrapper-1.1.1.tar.gz::https://github.com/Vikyek/paru-wrapper/archive/refs/tags/v1.1.1.tar.gz
 	sha256sums = SKIP
 
 pkgname = paru-wrapper

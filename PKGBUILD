@@ -1,28 +1,36 @@
-# Maintainer: Releaser <releaser@example.com>
+# Maintainer: Vikyek
+
 pkgname=paru-wrapper
-pkgver=1.0.0
-pkgrel=7
-pkgdesc="A wrapper around paru that implements dependency-aware orphan cleaning and automatic local repository DB updates"
+pkgver=1.1.1
+pkgrel=1
+pkgdesc="Custom paru wrapper providing automatic local AUR repo management and --gittinator VCS migrations"
 arch=('any')
 url="https://github.com/Vikyek/paru-wrapper"
 license=('GPL-3.0-only')
-depends=('paru' 'bash' 'sudo' 'python' 'jq' 'curl' 'git')
-install=paru-wrapper.install
-source=(
-    "paru-wrapper"
-    "update_mkvpkg_aur.py"
-    "pacman-wrapper"
-    "LICENSE"
+depends=(
+    'paru'
+    'bash'
+    'sudo'
+    'python'
+    'jq'
+    'curl'
+    'git'
 )
-sha256sums=('SKIP'
-            'SKIP'
-            'SKIP'
-            'SKIP')
+install=paru-wrapper.install
+
+source=(
+    "${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz"
+)
+
+sha256sums=(
+    'SKIP'
+)
 
 package() {
-    # Install paru wrapper
-    install -Dm755 "${srcdir}/paru-wrapper" "${pkgdir}/usr/bin/paru-wrapper"
-    install -Dm755 "${srcdir}/update_mkvpkg_aur.py" "${pkgdir}/usr/bin/update_mkvpkg_aur.py"
-    install -Dm755 "${srcdir}/pacman-wrapper" "${pkgdir}/usr/bin/pacman-wrapper"
-    install -Dm644 "${srcdir}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+    cd "${srcdir}/${pkgname}-${pkgver}"
+
+    install -Dm755 paru-wrapper "${pkgdir}/usr/bin/paru-wrapper"
+    install -Dm755 pacman-wrapper "${pkgdir}/usr/bin/pacman-wrapper"
+    install -Dm755 update_mkvpkg_aur.py "${pkgdir}/usr/bin/update_mkvpkg_aur.py"
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }
