@@ -575,11 +575,15 @@ if [ "$is_transaction" = true ]; then
         fi
 
         # 4. Filter out any orphans that are in new_deps
-        # Pad with newlines to ensure exact matching using pure bash, avoiding O(N) subprocess forks
-        new_deps_padded=$'\n'"$new_deps"$'\n'
+        # Performance Optimization: Populate an associative array to avoid O(N*M) slow string substring matching loop.
+        declare -A new_deps_map=()
+        while IFS= read -r dep; do
+            [[ -n "$dep" ]] && new_deps_map["$dep"]=1
+        done <<< "$new_deps"
+
         orphans_to_remove=()
         for orphan in $orphans; do
-            if [[ "$new_deps_padded" == *$'\n'"$orphan"$'\n'* ]]; then
+            if [[ "${new_deps_map[$orphan]+isset}" ]]; then
                 msg_info "Preserving orphan package '$orphan' (will be needed by incoming updates)."
             else
                 orphans_to_remove+=("$orphan")
