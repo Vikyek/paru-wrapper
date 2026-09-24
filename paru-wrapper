@@ -85,10 +85,10 @@ purge_broken_clones() {
     local cleaned=0
     for d in "$PARU_CLONE_DIR"/*/; do
         [[ -d "$d" ]] || continue
-        if [[ ! -d "${d}.git" ]]; then
+        if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
             local pkg_name
             pkg_name=$(basename "$d")
-            msg_info "Purging corrupted clone cache: $pkg_name (missing .git)"
+            msg_info "Purging corrupted clone cache: $pkg_name (corrupted or missing .git)"
             rm -rf "$d"
             ((cleaned++)) || true
         fi
@@ -114,7 +114,7 @@ run_paru_with_clone_repair() {
             if [[ -d "$PARU_CLONE_DIR" ]]; then
                 for d in "$PARU_CLONE_DIR"/*/; do
                     [[ -d "$d" ]] || continue
-                    if [[ ! -d "${d}.git" ]]; then
+                    if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
                         local pkg_name
                         pkg_name=$(basename "$d")
                         msg_info "Auto-repairing corrupted clone cache: $pkg_name (attempt $attempt/$max_retries)"
@@ -554,14 +554,21 @@ if [ "$is_transaction" = true ]; then
         # 3. Find dependencies of the new versions of the upgraded packages
         new_deps=""
         if [[ -n "$upgrades" ]]; then
-            # Query pacman sync database for repository packages dependencies
-            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | awk '/^(Depends On|Depends)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
+            # Query pacman sync database for repository packages dependencies (including make dependencies if available)
+            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
             
-            # Query AUR RPC (or paru info) for AUR package dependencies
+            # Query AUR RPC (or paru info) for AUR package dependencies and makedepends
             aur_deps=""
-            aur_upgrades=$(echo "$upgrades" | grep -vFf <(pacman -Slq 2>/dev/null) || true)
+            # Exclude packages from official repositories, but include custom local repository targets in AUR checks
+            local_repo_pattern="${PARU_WRAPPER_REPO:-}"
+            if [[ -n "$local_repo_pattern" ]]; then
+                official_pkgs_list=$(pacman -Sl 2>/dev/null | awk -v repo="$local_repo_pattern" '$1 != repo { print $2 }')
+            else
+                official_pkgs_list=$(pacman -Slq 2>/dev/null)
+            fi
+            aur_upgrades=$(echo "$upgrades" | grep -vFf <(echo "$official_pkgs_list") || true)
             if [[ -n "$aur_upgrades" ]]; then
-                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru -Si 2>/dev/null | awk '/^(Depends On|Depends)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
+                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru --aur -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
             fi
 
             new_deps=$(echo -e "${repo_deps}\n${aur_deps}" | sort -u)

@@ -1,7 +1,7 @@
 # paru-wrapper (v1.1.0)
 
 A power-user wrapper for `paru` and `pacman` designed to manage local custom AUR
-repositories (`mkvpkg`), automate package database synchronization, and provide
+repositories (`myrepo`), automate package database synchronization, and provide
 seamless, system-wide migration to development (`-git`) packages.
 
 ---
@@ -13,8 +13,8 @@ seamless, system-wide migration to development (`-git`) packages.
   User Repository (AUR) RPC API in optimal batches of 50 candidates, identifies
   existing `-git` counterparts, prompts to replace them, and triggers a full
   system update with `--devel` enabled.
-- **Automated Local AUR Synchronization (`mkvpkg`):** Intercepts package
-  management commands to trigger `update_mkvpkg_aur.py`. It checks if newer
+- **Automated Local AUR Synchronization (`myrepo`):** Intercepts package
+  management commands to trigger `update_repo_aur.py`. It checks if newer
   versions of your locally built custom packages exist in the AUR, auto-upgrades
   installed packages when configured, and manages repository cleanup (e.g.,
   removing non-git packages when `-git` variants take priority).
@@ -67,7 +67,7 @@ paru-wrapper/
 
 | Variable                             | Default | Purpose                                                                                                                                                  |
 | :----------------------------------- | :------ | :------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PARU_WRAPPER_AUTO_UPDATE_INSTALLED` | `1`     | Automatically upgrades local `mkvpkg` packages when a newer version is found in the AUR. Set to `0` to disable automatic upgrades and only log warnings. |
+| `PARU_WRAPPER_AUTO_UPDATE_INSTALLED` | `1`     | Automatically upgrades local custom repository packages when a newer version is found in the AUR. Set to `0` to disable automatic upgrades and only log warnings. |
 
 ---
 
