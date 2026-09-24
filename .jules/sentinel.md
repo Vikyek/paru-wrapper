@@ -42,3 +42,7 @@
 **Vulnerability:** TOCTOU (Time-of-Check to Time-of-Use) symlink overwrite vulnerability when writing files to cache directories.
 **Learning:** Using `[ ! -L file ]` or conditionally recreating a file before directly redirecting output (`echo > file`) still leaves a race condition window open before the shell's `open()` call. This allows an attacker to plant a symlink and overwrite arbitrary files.
 **Prevention:** Securely create a temporary file using `mktemp`, verify it is not empty (`[ -n "$tmp" ]`), write to it, and atomically replace the target using `mv -f`.
+## 2026-08-31 - URL Injection in Bash curl commands
+**Vulnerability:** Found a URL injection vulnerability in `paru-wrapper-gittinator-impl` where dynamic package names were inserted into an AUR RPC URL via string interpolation (`URL_PARAMS+="&arg[]=${candidate}"` -> `curl -s "https://aur.archlinux.org/rpc/v5/info?${URL_PARAMS}"`).
+**Learning:** Manual string interpolation for query parameters fails to URL-encode special characters in bash scripts as well. In Arch Linux, packages can contain characters like `+` (e.g., `gcc++`). If unencoded, the `+` is interpreted as a space by the server, causing logical bugs (e.g., retrieving `gcc  ` instead of `gcc++`) and allowing potential parameter injection.
+**Prevention:** Always use `curl -G` alongside `--data-urlencode "key=value"` to securely pass and automatically URL-encode dynamic query parameters in bash scripts.
