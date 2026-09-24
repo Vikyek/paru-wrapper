@@ -147,9 +147,9 @@ if [ -f "$HOME/.config/paru-wrapper/paru-wrapper.conf" ]; then
 fi
 
 # Apply configurable fallbacks (Environment > Config > Defaults)
-PARU_WRAPPER_REPO="${PARU_WRAPPER_REPO:-MKVPKG}"
-PARU_WRAPPER_REPO_DIR="${PARU_WRAPPER_REPO_DIR:-/mnt/v/Data/makepkg/packages}"
-PARU_WRAPPER_REPO_DB="${PARU_WRAPPER_REPO_DB:-${PARU_WRAPPER_REPO_DIR}/MKVPKG.db.tar.gz}"
+PARU_WRAPPER_REPO="${PARU_WRAPPER_REPO:-}"
+PARU_WRAPPER_REPO_DIR="${PARU_WRAPPER_REPO_DIR:-}"
+PARU_WRAPPER_REPO_DB="${PARU_WRAPPER_REPO_DB:-${PARU_WRAPPER_REPO_DIR:+${PARU_WRAPPER_REPO_DIR}/${PARU_WRAPPER_REPO}.db.tar.gz}}"
 PARU_WRAPPER_PROJECTS_DIR="${PARU_WRAPPER_PROJECTS_DIR:-${HOME:-/root}/Projects}"
 PARU_WRAPPER_DRY_RUN="${PARU_WRAPPER_DRY_RUN:-false}"
 PARU_WRAPPER_AUTO_UPDATE_INSTALLED="${PARU_WRAPPER_AUTO_UPDATE_INSTALLED:-true}"
@@ -661,14 +661,14 @@ if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ] && [ "${hooks_dis
         fi
     fi
 fi
-# Optional agy-syncvault integration
+# Optional post-transaction hook integration
 if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ]; then
     # Resolve SUDO_USER or USER home directory safely
     INVOKING_USER="${SUDO_USER:-$USER}"
     RUN_USER_HOME=$(getent passwd "$INVOKING_USER" | cut -d: -f6)
     VAULT_SYNC_SCRIPT="${RUN_USER_HOME}/.gemini/config/scripts/auto_sync_vault.py"
     if [ -f "$VAULT_SYNC_SCRIPT" ]; then
-        msg_info "Triggering agy-syncvault background sync..."
+        msg_info "Triggering post-transaction background sync..."
         runuser -u "$INVOKING_USER" -- python3 "$VAULT_SYNC_SCRIPT" >/dev/null 2>&1 &
     fi
 fi
