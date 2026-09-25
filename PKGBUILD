@@ -16,6 +16,11 @@ depends=(
     'curl'
     'git'
 )
+optdepends=(
+    'snapper: for pre/post transaction snapshots'
+    'rebuild-check: for running rebuild-check after transactions'
+    'anneal: for managing the anneal rebuild queue'
+)
 install=paru-wrapper.install
 
 source=(
