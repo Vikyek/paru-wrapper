@@ -42,3 +42,7 @@
 **Vulnerability:** TOCTOU (Time-of-Check to Time-of-Use) symlink overwrite vulnerability when writing files to cache directories.
 **Learning:** Using `[ ! -L file ]` or conditionally recreating a file before directly redirecting output (`echo > file`) still leaves a race condition window open before the shell's `open()` call. This allows an attacker to plant a symlink and overwrite arbitrary files.
 **Prevention:** Securely create a temporary file using `mktemp`, verify it is not empty (`[ -n "$tmp" ]`), write to it, and atomically replace the target using `mv -f`.
+## 2024-05-24 - File Deletion/Overwrite via Symlink Dereferencing/Nesting
+**Vulnerability:** Arbitrary file overwrite or deletion due to TOCTOU symlink vulnerabilities when using `rm -rf`, `mv -f`, or `ln -sf` with user-controlled cache and target paths.
+**Learning:** Using `rm -rf` on a directory path with a trailing slash (e.g. from globbing) dereferences the link and deletes the contents of the target directory if the path is a symlink. Using `mv -f` or `ln -sf` without the `-T` flag allows an attacker to plant a directory symlink, causing the moved file or new symlink to be nested inside the target directory rather than safely replacing the symlink.
+**Prevention:** Always strip trailing slashes (e.g. `rm -rf "${d%/}"`) when removing dynamic directory paths. Always use `mv -f -T` and `ln -sf -T` to ensure the operation replaces the target instead of nesting inside it.
