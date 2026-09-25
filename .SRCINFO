@@ -13,6 +13,9 @@ pkgbase = paru-wrapper
 	depends = jq
 	depends = curl
 	depends = git
+	optdepends = snapper: for pre/post transaction snapshots
+	optdepends = rebuild-check: for running rebuild-check after transactions
+	optdepends = anneal: for managing the anneal rebuild queue
 	source = paru-wrapper-1.1.2.tar.gz::https://github.com/Vikyek/paru-wrapper/archive/refs/tags/v1.1.2.tar.gz
 	sha256sums = SKIP
 
