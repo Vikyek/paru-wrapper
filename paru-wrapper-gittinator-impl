@@ -55,9 +55,9 @@ if [[ $GITTINATOR -eq 1 ]]; then
 
         for ((i=0; i<${#CANDIDATES[@]}; i+=BATCH_SIZE)); do
             BATCH=("${CANDIDATES[@]:i:BATCH_SIZE}")
-            URL_PARAMS=""
+            CURL_ARGS=()
             for candidate in "${BATCH[@]}"; do
-                URL_PARAMS+="&arg[]=${candidate}"
+                CURL_ARGS+=(--data-urlencode "arg[]=${candidate}")
             done
 
             RESPONSE=$(curl -s "https://aur.archlinux.org/rpc/v5/info?${URL_PARAMS}")
