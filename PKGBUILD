@@ -14,11 +14,11 @@ depends=(
     'jq'
     'curl'
     'git'
+    'sudo'
 )
 optdepends=(
     'pacman: Arch Linux package manager'
     'make: System build tools'
-    'sudo: For elevated operations'
     'snapper: For pre/post btrfs snapshots'
     'rebuild-check: Check for packages needing rebuild'
     'anneal: Marking/unmarking packages'
