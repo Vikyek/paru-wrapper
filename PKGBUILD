@@ -10,11 +10,18 @@ license=('GPL-3.0-only')
 depends=(
     'paru'
     'bash'
-    'sudo'
     'python'
     'jq'
     'curl'
     'git'
+)
+optdepends=(
+    'pacman: Arch Linux package manager'
+    'make: System build tools'
+    'sudo: For elevated operations'
+    'snapper: For pre/post btrfs snapshots'
+    'rebuild-check: Check for packages needing rebuild'
+    'anneal: Marking/unmarking packages'
 )
 install=paru-wrapper.install
 
