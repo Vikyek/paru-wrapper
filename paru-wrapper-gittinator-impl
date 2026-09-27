@@ -61,13 +61,9 @@ if [[ $GITTINATOR -eq 1 ]]; then
             done
 
             RESPONSE=$(curl -s "https://aur.archlinux.org/rpc/v5/info?${URL_PARAMS}")
-            MATCHES=$(echo "$RESPONSE" | jq -r '.results[].Name' 2>/dev/null || true)
-
-            for match in $MATCHES; do
-                if [[ -n "$match" && "$match" != "null" ]]; then
-                    FOUND_GIT_PKGS+=("$match")
-                fi
-            done
+            # Performance Optimization: Offload JSON parsing and array assignment to jq and eval
+            # to eliminate slow O(N) bash while-read loop overhead.
+            eval "$(echo "$RESPONSE" | jq -r '.results[]? | select(.Name != null and .Name != "") | "FOUND_GIT_PKGS+=(\(.Name | @sh))"' 2>/dev/null)"
         done
 
         if [[ ${#FOUND_GIT_PKGS[@]} -gt 0 ]]; then
