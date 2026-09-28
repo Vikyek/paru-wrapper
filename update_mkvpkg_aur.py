@@ -31,6 +31,12 @@ def run_cmd(cmd):
         return ""
 
 def parse_evr(evr: str):
+    """
+    Parses an Arch Linux EVR (Epoch, Version, Release) string into its components.
+
+    @param evr - The full EVR version string (e.g., '1:2.3-4')
+    @returns A tuple containing (epoch, version, release) strings
+    """
     s = 0
     while s < len(evr) and evr[s].isdigit(): s += 1
     se = evr.rfind('-')
@@ -44,6 +50,13 @@ def parse_evr(evr: str):
     return epoch, evr[version_start:], None
 
 def rpmvercmp(a: str, b: str) -> int:
+    """
+    Compares two version or release string segments using the rpmvercmp algorithm.
+
+    @param a - The first version segment
+    @param b - The second version segment
+    @returns 1 if a > b, -1 if a < b, 0 if they are equal
+    """
     a, b = str(a), str(b)
     if a == b: return 0
     p1, p2, l1, l2 = 0, 0, len(a), len(b)
@@ -169,6 +182,10 @@ def query_aur(packages):
     return results
 
 def main():
+    """
+    Main execution entry point. Scans local repo, queries AUR, and unregisters
+    outdated packages to force rebuilds during the next sync.
+    """
     use_color = not os.environ.get("NO_COLOR") and sys.stderr.isatty()
     c_info = "\033[1;34m" if use_color else ""
     c_warn = "\033[1;33m" if use_color else ""
