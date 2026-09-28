@@ -61,10 +61,11 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
                 c_prefix='\e[1;34m'
                 c_green='\e[1;32m'
                 c_gray='\e[1;30m'
+                c_bold='\e[1m'
                 c_reset='\e[0m'
 
                 # Use carriage return and clear to end of line to overwrite previous progress
-                echo -ne "\r\033[K${c_prefix}[paru-wrapper]${c_reset} Progress: ${c_green}${completed}${c_reset} / ${total} (${c_green}${percent}%${c_reset}) [${c_green}${bar_full:0:filled}${c_gray}${bar_empty:0:bar_len-filled}${c_reset}]" >&2
+                echo -ne "\r\033[K${c_prefix}[paru-wrapper]${c_reset} Progress: ${c_green}${c_bold}${completed}${c_reset} / ${c_bold}${total}${c_reset} (${c_green}${c_bold}${percent}%${c_reset}) [${c_green}${bar_full:0:filled}${c_gray}${bar_empty:0:bar_len-filled}${c_reset}]" >&2
 
                 # Print final newline when complete
                 if [ "$completed" -eq "$total" ]; then

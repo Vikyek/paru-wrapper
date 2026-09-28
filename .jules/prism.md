@@ -12,3 +12,6 @@
 ## 2024-05-19 - Safe In-Place Progress Bars in Shell Wrappers
 **Learning:** Using `echo -ne "\r\033[K..."` is an extremely effective way to create in-place updating progress counters in pure bash. However, it requires safe fallback behavior via `[ -t 2 ]` and `[ -z "${NO_COLOR:-}" ]` to prevent breaking piped scripts, CI environments, and stdout logging (by keeping output on stderr `>&2`).
 **Action:** When implementing CLI progress indicators in raw shell environments, always check if standard error (or stdout if writing there) is connected to a TTY (`-t 2`) and respect `NO_COLOR` before injecting carriage returns and ANSI line-clearing escapes. Provide a clean, non-spammy fallback for non-TTY environments.
+## 2024-05-18 - Improve CLI formatting for repetitive lists
+**Learning:** Printing repetitive line-by-line CLI output can cause terminal spam and reduce scannability.
+**Action:** Group repetitive messages into logical categories and use a single summary header followed by an aligned, bulleted list (`-> item (old -> new)`). This keeps the output clean and immediately highlights actions.
