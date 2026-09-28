@@ -7,3 +7,6 @@
 ## 2024-09-27 - Fast JSON Processing in Bash
 **Learning:** Using `while read` loops combined with `jq -r` to parse JSON array responses into bash associative arrays creates a severe `O(N)` bottleneck due to bash string parsing and variable assignment overhead.
 **Action:** Offload the JSON array parsing directly to `jq`, and use `jq` to format the output as `eval`-compatible bash array assignments with safe `@sh` quoting (e.g. `eval "$(echo "$JSON" | jq -r '... | "_cache[\(.key | @sh)]=\(.value | @sh)"')" `). This bypasses the bash loop entirely and reduces Bash per-record overhead, improving the constant factor by up to 3x compared with `while read`.
+## 2024-10-25 - Fast Substring Matching in Bash
+**Learning:** Using an O(N*M) substring search loop in bash (e.g., `for` loop with `== *match*`) is significantly slower than doing O(1) map lookups using associative arrays.
+**Action:** When filtering or matching items against a list, build an associative array (`declare -A map=()`) from the list via a `while read` loop and use `[[ "${map[$key]+isset}" ]]` for O(1) lookups to avoid O(N*M) performance bottlenecks.
