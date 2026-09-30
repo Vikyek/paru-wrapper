@@ -31,6 +31,12 @@ def run_cmd(cmd):
         return ""
 
 def parse_evr(evr: str):
+    """
+    Parses an Arch Linux package version string into Epoch, Version, and Release components.
+
+    @param evr - The full EVR version string (e.g., '1:1.0-2')
+    @returns A tuple containing (epoch, version, release)
+    """
     s = 0
     while s < len(evr) and evr[s].isdigit(): s += 1
     se = evr.rfind('-')
