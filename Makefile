@@ -12,7 +12,7 @@ install:
 	install -Dm755 paru-wrapper-gittinator $(DESTDIR)$(PREFIX)/lib/paru-wrapper/paru-wrapper-gittinator
 	install -Dm755 paru-wrapper-gittinator-impl $(DESTDIR)$(PREFIX)/lib/paru-wrapper/paru-wrapper-gittinator-impl
 	install -Dm755 pacman-wrapper $(DESTDIR)$(BINDIR)/pacman-wrapper
-	ln -sf $(BINDIR)/paru-wrapper $(DESTDIR)$(BINDIR)/paru
+	ln -sf -T $(BINDIR)/paru-wrapper $(DESTDIR)$(BINDIR)/paru
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/paru-wrapper
