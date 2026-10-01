@@ -34,27 +34,13 @@ set -- "${CLEAN_ARGS[@]}"
 # 2. Gittinator Mode Execution
 # ------------------------------------------------------------------------------
 if [[ $GITTINATOR -eq 1 ]]; then
-    if [[ -z "${NO_COLOR:-}" && -t 2 ]]; then
-        C_INFO='\e[1;34m'
-        C_BOLD='\e[1m'
-        C_RESET='\e[0m'
-        C_BORDER='\e[1;35m'
-        C_GREEN='\e[1;32m'
-    else
-        C_INFO=''
-        C_BOLD=''
-        C_RESET=''
-        C_BORDER=''
-        C_GREEN=''
-    fi
+    echo "=========================================================="
+    echo "        --- GITTINATOR MODE ACTIVATED ---                 "
+    echo "   Converting installed packages to -git AUR variants     "
+    echo "=========================================================="
+    echo ""
 
-    echo -e "${C_BORDER}==========================================================${C_RESET}" >&2
-    echo -e "${C_BORDER}        --- ${C_BOLD}GITTINATOR MODE ACTIVATED${C_RESET}${C_BORDER} ---                 ${C_RESET}" >&2
-    echo -e "${C_BORDER}   Converting installed packages to -git AUR variants     ${C_RESET}" >&2
-    echo -e "${C_BORDER}==========================================================${C_RESET}" >&2
-    echo "" >&2
-
-    echo -e "${C_INFO}[gittinator]${C_RESET} Scanning explicitly installed packages..." >&2
+    echo "--> Scanning explicitly installed packages..."
     INSTALLED_PKGS=$(pacman -Qqe | grep -vE '\-(git|svn|hg|bzr)$' || true)
 
     if [[ -n "$INSTALLED_PKGS" ]]; then
@@ -63,7 +49,7 @@ if [[ $GITTINATOR -eq 1 ]]; then
             CANDIDATES+=("${pkg}-git")
         done
 
-        echo -e "${C_INFO}-->${C_RESET} ${C_BOLD}Querying AUR API for available -git counterparts...${C_RESET}"
+        echo "--> Querying AUR API for available -git counterparts..."
         FOUND_GIT_PKGS=()
         BATCH_SIZE=50
 
@@ -74,7 +60,7 @@ if [[ $GITTINATOR -eq 1 ]]; then
                 CURL_ARGS+=(--data-urlencode "arg[]=${candidate}")
             done
 
-            RESPONSE=$(curl -s "https://aur.archlinux.org/rpc/v5/info?${URL_PARAMS}")
+            RESPONSE=$(curl -G -s "https://aur.archlinux.org/rpc/v5/info" "${CURL_ARGS[@]}")
             # Performance Optimization: Offload JSON parsing and array assignment to jq and eval
             # to eliminate slow O(N) bash while-read loop overhead.
             eval "$(echo "$RESPONSE" | jq -r '.results[]? | select(.Name != null and .Name != "") | "FOUND_GIT_PKGS+=(\(.Name | @sh))"' 2>/dev/null)"
@@ -84,7 +70,7 @@ if [[ $GITTINATOR -eq 1 ]]; then
             echo ""
             echo "Found ${#FOUND_GIT_PKGS[@]} -git package replacements in AUR:"
             for pkg in "${FOUND_GIT_PKGS[@]}"; do
-                echo -e "  -> ${C_BOLD}${pkg}${C_RESET}"
+                echo "  * ${pkg}"
             done
             echo ""
 
@@ -101,7 +87,7 @@ if [[ $GITTINATOR -eq 1 ]]; then
     fi
 
     echo ""
-    echo -e "${C_INFO}-->${C_RESET} ${C_BOLD}Running full system update with VCS tracking (--devel)...${C_RESET}"
+    echo "--> Running full system update with VCS tracking (--devel)..."
     exec "$REAL_PARU" -Syu --devel --needed "$@"
 fi
 

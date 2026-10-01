@@ -123,7 +123,7 @@ if [[ -f "$cached_archive" ]]; then
             "$downloaded_archive" \
             "${cached_archive}.new"
 
-        mv -f -T -- "${cached_archive}.new" "$cached_archive"
+        mv -f -- "${cached_archive}.new" "$cached_archive"
     fi
 else
     printf 'Populating source cache: %s\n' "$cached_archive"
@@ -133,7 +133,7 @@ else
         "$downloaded_archive" \
         "${cached_archive}.new"
 
-    mv -f -T -- "${cached_archive}.new" "$cached_archive"
+    mv -f -- "${cached_archive}.new" "$cached_archive"
 fi
 
 # If SRCDEST differs from the repository directory, remove a second stale
