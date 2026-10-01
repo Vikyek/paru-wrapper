@@ -42,7 +42,7 @@
 **Vulnerability:** TOCTOU (Time-of-Check to Time-of-Use) symlink overwrite vulnerability when writing files to cache directories.
 **Learning:** Using `[ ! -L file ]` or conditionally recreating a file before directly redirecting output (`echo > file`) still leaves a race condition window open before the shell's `open()` call. This allows an attacker to plant a symlink and overwrite arbitrary files.
 **Prevention:** Securely create a temporary file using `mktemp`, verify it is not empty (`[ -n "$tmp" ]`), write to it, and atomically replace the target using `mv -f`.
-## 2026-09-30 - Arbitrary file deletion via symlink dereferencing
-**Vulnerability:** Arbitrary file deletion when running `rm -rf` on a symlink directory path with a trailing slash (e.g., from `dir/*/` globbing).
-**Learning:** `rm -rf "$d"` on a symlink directory path with a trailing slash removes the contents of the target directory rather than removing the symlink itself.
-**Prevention:** Always strip trailing slashes (`${d%/}`) when passing dynamic directory paths to `rm -rf`.
+## 2024-09-28 - [CRITICAL] Arbitrary file deletion via symlink in cache dir
+**Vulnerability:** `rm -rf "$d"` on a directory path with a trailing slash from globbing `for d in "$PARU_CLONE_DIR"/*/` allows an attacker to create a symlink in the cache dir that will be dereferenced by `rm -rf`, resulting in deletion of the target directory's contents rather than the symlink.
+**Learning:** `rm -rf` on symlinks with trailing slashes deletes the target directory contents.
+**Prevention:** Always strip trailing slashes (e.g. `rm -rf "${d%/}"`) when passing dynamic directory paths to `rm -rf`.
