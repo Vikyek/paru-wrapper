@@ -221,8 +221,8 @@ def main():
         if items:
             sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} {title}\n")
             if isinstance(items[0], tuple):
-                max_pkg_width = max(len(item[0]) for item in items)
-                max_version_width = max(max(len(item[1]), len(item[2])) for item in items)
+                max_pkg_width = max((len(item[0]) for item in items), default=0)
+                max_version_width = max((max(len(item[1]), len(item[2])) for item in items), default=0)
                 for item in items:
                     sys.stderr.write(f"  -> {item[0]:<{max_pkg_width}} ({item[1]:<{max_version_width}} -> {item[2]:<{max_version_width}})\n")
             else:
