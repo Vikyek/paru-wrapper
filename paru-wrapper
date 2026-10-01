@@ -87,7 +87,7 @@ purge_broken_clones() {
     local cleaned=0
     for d in "$PARU_CLONE_DIR"/*/; do
         [[ -d "$d" ]] || continue
-        if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
+        if [[ ! -d "${d}.git" ]] || [[ ! -f "${d}.git/HEAD" ]]; then
             local pkg_name
             pkg_name=$(basename "$d")
             msg_info "Purging corrupted clone cache: $pkg_name (corrupted or missing .git)"
@@ -116,7 +116,7 @@ run_paru_with_clone_repair() {
             if [[ -d "$PARU_CLONE_DIR" ]]; then
                 for d in "$PARU_CLONE_DIR"/*/; do
                     [[ -d "$d" ]] || continue
-                    if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
+                    if [[ ! -d "${d}.git" ]] || [[ ! -f "${d}.git/HEAD" ]]; then
                         local pkg_name
                         pkg_name=$(basename "$d")
                         msg_info "Auto-repairing corrupted clone cache: $pkg_name (attempt $attempt/$max_retries)"

@@ -10,3 +10,6 @@
 ## 2024-09-29 - O(1) Bash Array Lookups over Substring Matching
 **Learning:** Using `*$'\n'"$key"$'\n'*` for substring matching against a padded multi-line string inside a loop creates an O(N*M) bottleneck in bash.
 **Action:** When optimizing slow O(N*M) substring matching loops in bash, use an associative array (`declare -A map=()`) populated via a `while read` loop and perform O(1) existence checks with `[[ "${map[$key]+isset}" ]]` to maximize performance without subprocess overhead.
+## 2026-10-01 - O(N) Subprocess Calls in Bash Loops
+**Learning:** Using `git -C "$d" rev-parse --git-dir` inside a loop over many directories introduces massive subprocess overhead (O(N)), making it severely slow.
+**Action:** When iterating over many directories to check if they are valid Git repositories in bash, use native file existence checks like `[[ -d "${d}.git" ]] && [[ -f "${d}.git/HEAD" ]]` instead of shelling out to `git`. This eliminates subprocess forks and runs orders of magnitude faster.
