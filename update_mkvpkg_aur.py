@@ -50,6 +50,14 @@ def parse_evr(evr: str):
     return epoch, evr[version_start:], None
 
 def rpmvercmp(a: str, b: str) -> int:
+    """
+    Compares two RPM-style version strings by segmenting them into alphanumeric chunks.
+    This logic is used internally by alpm_vercmp to handle epoch, version, and release strings.
+
+    @param a - The first version string to compare
+    @param b - The second version string to compare
+    @returns 1 if a > b, -1 if a < b, 0 if they are equal
+    """
     a, b = str(a), str(b)
     if a == b: return 0
     p1, p2, l1, l2 = 0, 0, len(a), len(b)
