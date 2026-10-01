@@ -35,7 +35,7 @@ def parse_evr(evr: str):
     Parses an Arch Linux EVR (Epoch, Version, Release) string into its components.
 
     @param evr - The full EVR version string (e.g., '1:2.3-4')
-    @returns A tuple containing (epoch, version, release) strings
+    @returns A tuple containing (epoch, version, release) as (str, str, str | None); release is None when the input has no '-' separator
     """
     s = 0
     while s < len(evr) and evr[s].isdigit(): s += 1
