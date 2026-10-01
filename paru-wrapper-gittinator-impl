@@ -63,7 +63,7 @@ if [[ $GITTINATOR -eq 1 ]]; then
             CANDIDATES+=("${pkg}-git")
         done
 
-        echo "--> Querying AUR API for available -git counterparts..."
+        echo -e "${C_INFO}-->${C_RESET} ${C_BOLD}Querying AUR API for available -git counterparts...${C_RESET}"
         FOUND_GIT_PKGS=()
         BATCH_SIZE=50
 
@@ -84,7 +84,7 @@ if [[ $GITTINATOR -eq 1 ]]; then
             echo ""
             echo "Found ${#FOUND_GIT_PKGS[@]} -git package replacements in AUR:"
             for pkg in "${FOUND_GIT_PKGS[@]}"; do
-                echo "  * ${pkg}"
+                echo -e "  -> ${C_BOLD}${pkg}${C_RESET}"
             done
             echo ""
 
@@ -101,7 +101,7 @@ if [[ $GITTINATOR -eq 1 ]]; then
     fi
 
     echo ""
-    echo "--> Running full system update with VCS tracking (--devel)..."
+    echo -e "${C_INFO}-->${C_RESET} ${C_BOLD}Running full system update with VCS tracking (--devel)...${C_RESET}"
     exec "$REAL_PARU" -Syu --devel --needed "$@"
 fi
 
