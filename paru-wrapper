@@ -10,6 +10,22 @@
 
 set -euo pipefail
 
+if [ -z "${NO_COLOR:-}" ] && [ -t 2 ]; then
+    C_INFO='\e[1;34m'
+    C_WARN='\e[1;33m'
+    C_ERROR='\e[1;31m'
+    C_RESET='\e[0m'
+else
+    C_INFO=''
+    C_WARN=''
+    C_ERROR=''
+    C_RESET=''
+fi
+
+msg_info() { echo -e "${C_INFO}[paru-wrapper]${C_RESET} $*" >&2; }
+msg_warn() { echo -e "${C_WARN}[paru-wrapper] Warning:${C_RESET} $*" >&2; }
+msg_error() { echo -e "${C_ERROR}✖ Error:${C_RESET} $*" >&2; }
+
 # Dispatch the custom Gittinator mode before normal paru processing.
 for arg in "$@"; do
     if [[ "$arg" == "--gittinator" ]]; then
@@ -21,7 +37,7 @@ for arg in "$@"; do
             if [[ -x "$local_helper" ]]; then
                 gittinator_helper="$local_helper"
             else
-                echo "[paru-wrapper] Error: Gittinator helper is not installed." >&2
+                msg_error "Gittinator helper is not installed."
                 exit 1
             fi
         fi
@@ -29,21 +45,6 @@ for arg in "$@"; do
         exec "$gittinator_helper" "$@"
     fi
 done
-
-if [ -z "${NO_COLOR:-}" ] && [ -t 2 ]; then
-    C_INFO='\e[1;34m'
-    C_WARN='\e[1;33m'
-
-    C_RESET='\e[0m'
-else
-    C_INFO=''
-    C_WARN=''
-
-    C_RESET=''
-fi
-
-msg_info() { echo -e "${C_INFO}[paru-wrapper]${C_RESET} $*" >&2; }
-msg_warn() { echo -e "${C_WARN}[paru-wrapper] Warning:${C_RESET} $*" >&2; }
 
 
 declare -gA _aur_pkgs_cache=()
