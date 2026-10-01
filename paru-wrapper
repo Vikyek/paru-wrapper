@@ -557,7 +557,7 @@ if [ "$is_transaction" = true ]; then
         new_deps=""
         if [[ -n "$upgrades" ]]; then
             # Query pacman sync database for repository packages dependencies (including make dependencies if available)
-            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps|Check Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
+            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps|Check Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//; /^none$/d' | sort -u || true)
             
             # Query AUR RPC (or paru info) for AUR package dependencies and makedepends
             aur_deps=""
@@ -570,18 +570,22 @@ if [ "$is_transaction" = true ]; then
             fi
             aur_upgrades=$(echo "$upgrades" | grep -vFf <(echo "$official_pkgs_list") || true)
             if [[ -n "$aur_upgrades" ]]; then
-                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru --aur -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps|Check Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
+                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru --aur -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps|Check Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//; /^none$/d' | sort -u || true)
             fi
 
             new_deps=$(echo -e "${repo_deps}\n${aur_deps}" | sort -u)
         fi
 
         # 4. Filter out any orphans that are in new_deps
-        # Pad with newlines to ensure exact matching using pure bash, avoiding O(N) subprocess forks
-        new_deps_padded=$'\n'"$new_deps"$'\n'
+        # Optimization: Use an O(1) associative array lookup instead of O(N*M) substring matching
+        declare -A new_deps_map=()
+        while read -r dep; do
+            [[ -n "$dep" ]] && new_deps_map["$dep"]=1
+        done <<< "$new_deps"
+
         orphans_to_remove=()
         for orphan in $orphans; do
-            if [[ "$new_deps_padded" == *$'\n'"$orphan"$'\n'* ]]; then
+            if [[ "${new_deps_map[$orphan]+isset}" ]]; then
                 msg_info "Preserving orphan package '$orphan' (will be needed by incoming updates)."
             else
                 orphans_to_remove+=("$orphan")
