@@ -60,7 +60,7 @@ if [[ $GITTINATOR -eq 1 ]]; then
                 CURL_ARGS+=(--data-urlencode "arg[]=${candidate}")
             done
 
-            RESPONSE=$(curl -s "https://aur.archlinux.org/rpc/v5/info?${URL_PARAMS}")
+            RESPONSE=$(curl -G -s "https://aur.archlinux.org/rpc/v5/info" "${CURL_ARGS[@]}")
             # Performance Optimization: Offload JSON parsing and array assignment to jq and eval
             # to eliminate slow O(N) bash while-read loop overhead.
             eval "$(echo "$RESPONSE" | jq -r '.results[]? | select(.Name != null and .Name != "") | "FOUND_GIT_PKGS+=(\(.Name | @sh))"' 2>/dev/null)"
