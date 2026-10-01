@@ -7,6 +7,6 @@
 ## 2024-09-27 - Fast JSON Processing in Bash
 **Learning:** Using `while read` loops combined with `jq -r` to parse JSON array responses into bash associative arrays creates a severe `O(N)` bottleneck due to bash string parsing and variable assignment overhead.
 **Action:** Offload the JSON array parsing directly to `jq`, and use `jq` to format the output as `eval`-compatible bash array assignments with safe `@sh` quoting (e.g. `eval "$(echo "$JSON" | jq -r '... | "_cache[\(.key | @sh)]=\(.value | @sh)"')" `). This bypasses the bash loop entirely and reduces Bash per-record overhead, improving the constant factor by up to 3x compared with `while read`.
-## 2024-09-30 - O(1) Bash Associative Arrays vs Substring Lookups
-**Learning:** Using substring matching loops to filter array subsets in Bash (e.g. `if [[ "$list_a" == *"$item_b"* ]]`) scales poorly `O(N*M)` when comparing large transaction dependency and orphan lists.
-**Action:** When filtering or intersecting items between lists in Bash, populate an associative array (`declare -A map=()`) from the primary list using a `while read` loop, and then perform `O(1)` existence checks using `[[ "${map[$item]+isset}" ]]`, for an overall `O(M+N)` operation. This drastically reduces time complexity and subprocess overhead.
+## 2024-09-29 - O(1) Bash Array Lookups over Substring Matching
+**Learning:** Using `*$'\n'"$key"$'\n'*` for substring matching against a padded multi-line string inside a loop creates an O(N*M) bottleneck in bash.
+**Action:** When optimizing slow O(N*M) substring matching loops in bash, use an associative array (`declare -A map=()`) populated via a `while read` loop and perform O(1) existence checks with `[[ "${map[$key]+isset}" ]]` to maximize performance without subprocess overhead.
