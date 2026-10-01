@@ -34,25 +34,27 @@ set -- "${CLEAN_ARGS[@]}"
 # 2. Gittinator Mode Execution
 # ------------------------------------------------------------------------------
 if [[ $GITTINATOR -eq 1 ]]; then
-    if [[ -z "${NO_COLOR:-}" ]] && [[ -t 1 ]]; then
-        C_HEADER='\e[1;35m'
+    if [[ -z "${NO_COLOR:-}" && -t 2 ]]; then
         C_INFO='\e[1;34m'
         C_BOLD='\e[1m'
         C_RESET='\e[0m'
+        C_BORDER='\e[1;35m'
+        C_GREEN='\e[1;32m'
     else
-        C_HEADER=''
         C_INFO=''
         C_BOLD=''
         C_RESET=''
+        C_BORDER=''
+        C_GREEN=''
     fi
 
-    echo -e "${C_HEADER}==========================================================${C_RESET}"
-    echo -e "${C_HEADER}        --- GITTINATOR MODE ACTIVATED ---                 ${C_RESET}"
-    echo -e "${C_HEADER}   Converting installed packages to -git AUR variants     ${C_RESET}"
-    echo -e "${C_HEADER}==========================================================${C_RESET}"
-    echo ""
+    echo -e "${C_BORDER}==========================================================${C_RESET}" >&2
+    echo -e "${C_BORDER}        --- ${C_BOLD}GITTINATOR MODE ACTIVATED${C_RESET}${C_BORDER} ---                 ${C_RESET}" >&2
+    echo -e "${C_BORDER}   Converting installed packages to -git AUR variants     ${C_RESET}" >&2
+    echo -e "${C_BORDER}==========================================================${C_RESET}" >&2
+    echo "" >&2
 
-    echo -e "${C_INFO}-->${C_RESET} ${C_BOLD}Scanning explicitly installed packages...${C_RESET}"
+    echo -e "${C_INFO}[gittinator]${C_RESET} Scanning explicitly installed packages..." >&2
     INSTALLED_PKGS=$(pacman -Qqe | grep -vE '\-(git|svn|hg|bzr)$' || true)
 
     if [[ -n "$INSTALLED_PKGS" ]]; then
