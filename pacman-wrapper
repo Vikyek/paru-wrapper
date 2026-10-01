@@ -39,13 +39,13 @@ if [ -n "${CACHE_DIR:-}" ] && [ -f "$CACHE_DIR/paru_total_packages" ] && [ -f "$
                 tmp=$(sudo -u "$SUDO_USER" mktemp "$CACHE_DIR/paru_completed_packages.XXXXXX" 2>/dev/null || true)
                 if [ -n "$tmp" ]; then
                     echo "$completed" | sudo -u "$SUDO_USER" tee "$tmp" >/dev/null 2>&1 || true
-                    sudo -u "$SUDO_USER" mv -f "$tmp" "$CACHE_DIR/paru_completed_packages"
+                    sudo -u "$SUDO_USER" mv -f -T "$tmp" "$CACHE_DIR/paru_completed_packages"
                 fi
             else
                 tmp=$(mktemp "$CACHE_DIR/paru_completed_packages.XXXXXX" 2>/dev/null || true)
                 if [ -n "$tmp" ]; then
                     echo "$completed" > "$tmp" 2>/dev/null || true
-                    mv -f "$tmp" "$CACHE_DIR/paru_completed_packages"
+                    mv -f -T "$tmp" "$CACHE_DIR/paru_completed_packages"
                 fi
             fi
 
