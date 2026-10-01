@@ -31,12 +31,6 @@ def run_cmd(cmd):
         return ""
 
 def parse_evr(evr: str):
-    """
-    Parses an Arch Linux package version string into Epoch, Version, and Release components.
-
-    @param evr - The full EVR version string (e.g., '1:1.0-2')
-    @returns A tuple containing (epoch, version, release)
-    """
     s = 0
     while s < len(evr) and evr[s].isdigit(): s += 1
     se = evr.rfind('-')
@@ -50,6 +44,14 @@ def parse_evr(evr: str):
     return epoch, evr[version_start:], None
 
 def rpmvercmp(a: str, b: str) -> int:
+    """
+    Compares two RPM-style version strings by segmenting them into alphanumeric chunks.
+    This logic is used internally by alpm_vercmp to handle epoch, version, and release strings.
+
+    @param a - The first version string to compare
+    @param b - The second version string to compare
+    @returns 1 if a > b, -1 if a < b, 0 if they are equal
+    """
     a, b = str(a), str(b)
     if a == b: return 0
     p1, p2, l1, l2 = 0, 0, len(a), len(b)
@@ -206,29 +208,12 @@ def main():
     aur_versions = query_aur(unmodified_pkgs)
     pkgs_to_remove = []
 
-    def _print_group(title, items):
-        if items:
-            sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} {title}\n")
-            if isinstance(items[0], tuple):
-                max_pkg_width = max(len(item[0]) for item in items)
-                max_version_width = max(max(len(item[1]), len(item[2])) for item in items)
-                for item in items:
-                    sys.stderr.write(f"  -> {item[0]:<{max_pkg_width}} ({item[1]:<{max_version_width}} -> {item[2]:<{max_version_width}})\n")
-            else:
-                for item in items:
-                    sys.stderr.write(f"  -> {item}\n")
-
-    vcs_rem = []
-    upgrades = []
-    skipped = []
-    removals = []
-
     # Priority Check: If a non-git package exists in repo but a -git variant is installed,
     # auto-remove the non-git package to prevent conflicts and prioritize VCS versions.
     for pkg in unmodified_pkgs:
         if not pkg.endswith("-git"):
             if is_installed(f"{pkg}-git"):
-                vcs_rem.append(pkg)
+                sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Installed VCS package '{c_bold}{pkg}-git{c_reset}' takes priority over non-git '{c_bold}{pkg}{c_reset}' in {repo_name}. Removing non-git package...\n")
                 pkgs_to_remove.append(pkg)
 
     # Optimization: Use pure-Python alpm_vercmp to avoid subprocess overhead entirely
@@ -247,18 +232,13 @@ def main():
             if res > 0:
                 if is_installed(pkg):
                     if auto_update_installed:
-                        upgrades.append((pkg, local_ver, aur_ver))
+                        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
                         pkgs_to_remove.append(pkg)
                     else:
-                        skipped.append((pkg, local_ver, aur_ver))
+                        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade.\n")
                 else:
-                    removals.append((pkg, local_ver, aur_ver))
+                    sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of public package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade...\n")
                     pkgs_to_remove.append(pkg)
-
-    _print_group(f"Removing {len(vcs_rem)} non-git package(s) (installed VCS takes priority):", vcs_rem)
-    _print_group(f"Auto-upgrading {len(upgrades)} installed package(s) from AUR:", upgrades)
-    _print_group(f"Skipping {len(skipped)} AUR upgrade(s) (auto-update disabled):", skipped)
-    _print_group(f"Removing {len(removals)} package(s) from {c_bold}{repo_name}{c_reset} to trigger upgrade:", removals)
 
     # Optimization: Batch repo-remove operations to reduce subprocess overhead
     if pkgs_to_remove:
