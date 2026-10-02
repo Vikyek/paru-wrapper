@@ -13,6 +13,10 @@ pkgbase = paru-wrapper
 	depends = jq
 	depends = curl
 	depends = git
+	depends = coreutils
+	optdepends = snapper
+	optdepends = rebuild-check
+	optdepends = anneal
 	source = paru-wrapper-1.1.2.tar.gz::https://github.com/Vikyek/paru-wrapper/archive/refs/tags/v1.1.2.tar.gz
 	sha256sums = SKIP
 

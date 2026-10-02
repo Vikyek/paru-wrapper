@@ -15,6 +15,12 @@ depends=(
     'jq'
     'curl'
     'git'
+    'coreutils'
+)
+optdepends=(
+    'snapper'
+    'rebuild-check'
+    'anneal'
 )
 install=paru-wrapper.install
 
