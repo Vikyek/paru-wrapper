@@ -10,22 +10,6 @@
 
 set -euo pipefail
 
-if [ -z "${NO_COLOR:-}" ] && [ -t 2 ]; then
-    C_INFO='\e[1;34m'
-    C_WARN='\e[1;33m'
-    C_ERROR='\e[1;31m'
-    C_RESET='\e[0m'
-else
-    C_INFO=''
-    C_WARN=''
-    C_ERROR=''
-    C_RESET=''
-fi
-
-msg_info() { echo -e "${C_INFO}[paru-wrapper]${C_RESET} $*" >&2; }
-msg_warn() { echo -e "${C_WARN}[paru-wrapper] Warning:${C_RESET} $*" >&2; }
-msg_error() { echo -e "${C_ERROR}✖ Error:${C_RESET} $*" >&2; }
-
 # Dispatch the custom Gittinator mode before normal paru processing.
 for arg in "$@"; do
     if [[ "$arg" == "--gittinator" ]]; then
@@ -37,7 +21,7 @@ for arg in "$@"; do
             if [[ -x "$local_helper" ]]; then
                 gittinator_helper="$local_helper"
             else
-                msg_error "Gittinator helper is not installed."
+                echo "[paru-wrapper] Error: Gittinator helper is not installed." >&2
                 exit 1
             fi
         fi
@@ -45,6 +29,21 @@ for arg in "$@"; do
         exec "$gittinator_helper" "$@"
     fi
 done
+
+if [ -z "${NO_COLOR:-}" ] && [ -t 2 ]; then
+    C_INFO='\e[1;34m'
+    C_WARN='\e[1;33m'
+
+    C_RESET='\e[0m'
+else
+    C_INFO=''
+    C_WARN=''
+
+    C_RESET=''
+fi
+
+msg_info() { echo -e "${C_INFO}[paru-wrapper]${C_RESET} $*" >&2; }
+msg_warn() { echo -e "${C_WARN}[paru-wrapper] Warning:${C_RESET} $*" >&2; }
 
 
 declare -gA _aur_pkgs_cache=()
@@ -70,9 +69,13 @@ fetch_aur_metadata_batch() {
 
         curl_out=$(curl -s -f -G "https://aur.archlinux.org/rpc/v5/info" "${query_args[@]}" 2>/dev/null) || continue
 
-        # Performance Optimization: Offload JSON parsing and array assignment to jq and eval
-        # to eliminate slow O(N) bash while-read loop overhead.
-        eval "$(echo "$curl_out" | jq -r '.results[]? | select(.Name != null and .Name != "") | "_aur_pkgs_cache[\(.Name | @sh)]=\(.Version | @sh)"' 2>/dev/null)"
+        # Performance Optimization: Offload text processing to jq and evaluate once.
+        # This converts the O(N) bash while-read loop over curl output into an O(1) bulk evaluation,
+        # avoiding string comparison overhead in pure bash.
+        eval "$(echo "$curl_out" | jq -r '
+            .results[]? | select(.Name != null and .Name != "") |
+            "_aur_pkgs_cache[\(.Name | @sh)]=\(.Version | @sh)"
+        ' 2>/dev/null)"
     done
 }
 
@@ -84,7 +87,7 @@ purge_broken_clones() {
     local cleaned=0
     for d in "$PARU_CLONE_DIR"/*/; do
         [[ -d "$d" ]] || continue
-        if [[ ! -d "${d}.git" ]] || [[ ! -f "${d}.git/HEAD" ]]; then
+        if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
             local pkg_name
             pkg_name=$(basename "$d")
             msg_info "Purging corrupted clone cache: $pkg_name (corrupted or missing .git)"
@@ -113,7 +116,7 @@ run_paru_with_clone_repair() {
             if [[ -d "$PARU_CLONE_DIR" ]]; then
                 for d in "$PARU_CLONE_DIR"/*/; do
                     [[ -d "$d" ]] || continue
-                    if [[ ! -d "${d}.git" ]] || [[ ! -f "${d}.git/HEAD" ]]; then
+                    if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
                         local pkg_name
                         pkg_name=$(basename "$d")
                         msg_info "Auto-repairing corrupted clone cache: $pkg_name (attempt $attempt/$max_retries)"
@@ -574,14 +577,11 @@ if [ "$is_transaction" = true ]; then
         fi
 
         # 4. Filter out any orphans that are in new_deps
-        declare -A new_deps_map=()
-        while IFS= read -r dep; do
-            [[ -n "$dep" ]] && new_deps_map["$dep"]=1
-        done <<< "$new_deps"
-
+        # Pad with newlines to ensure exact matching using pure bash, avoiding O(N) subprocess forks
+        new_deps_padded=$'\n'"$new_deps"$'\n'
         orphans_to_remove=()
         for orphan in $orphans; do
-            if [[ "${new_deps_map["$orphan"]+isset}" ]]; then
+            if [[ "$new_deps_padded" == *$'\n'"$orphan"$'\n'* ]]; then
                 msg_info "Preserving orphan package '$orphan' (will be needed by incoming updates)."
             else
                 orphans_to_remove+=("$orphan")
