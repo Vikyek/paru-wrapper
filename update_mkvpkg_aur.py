@@ -31,6 +31,12 @@ def run_cmd(cmd):
         return ""
 
 def parse_evr(evr: str):
+    """
+    Parses an Arch Linux EVR (Epoch, Version, Release) string into its components.
+
+    @param evr - The full EVR version string (e.g., '1:2.3-4')
+    @returns A tuple containing (epoch, version, release) as (str, str, str | None); release is None when the input has no '-' separator
+    """
     s = 0
     while s < len(evr) and evr[s].isdigit(): s += 1
     se = evr.rfind('-')
@@ -44,6 +50,13 @@ def parse_evr(evr: str):
     return epoch, evr[version_start:], None
 
 def rpmvercmp(a: str, b: str) -> int:
+    """
+    Compares two version or release string segments using the rpmvercmp algorithm.
+
+    @param a - The first version segment
+    @param b - The second version segment
+    @returns 1 if a > b, -1 if a < b, 0 if they are equal
+    """
     a, b = str(a), str(b)
     if a == b: return 0
     p1, p2, l1, l2 = 0, 0, len(a), len(b)
@@ -71,6 +84,14 @@ def rpmvercmp(a: str, b: str) -> int:
     return 1
 
 def alpm_vercmp(a: str, b: str) -> int:
+    """
+    Compares two Arch Linux package version strings (EVR: Epoch, Version, Release)
+    using the standard ALPM (Arch Linux Package Management) version comparison rules.
+
+    @param a - The first version string to compare
+    @param b - The second version string to compare
+    @returns 1 if a > b, -1 if a < b, 0 if they are equal
+    """
     if a == b: return 0
     if not a or not b: return -1 if not a else 1
     e1, v1, r1 = parse_evr(a)
@@ -161,6 +182,10 @@ def query_aur(packages):
     return results
 
 def main():
+    """
+    Main execution entry point. Scans local repo, queries AUR, and unregisters
+    outdated packages to force rebuilds during the next sync.
+    """
     use_color = not os.environ.get("NO_COLOR") and sys.stderr.isatty()
     c_info = "\033[1;34m" if use_color else ""
     c_warn = "\033[1;33m" if use_color else ""
@@ -192,12 +217,29 @@ def main():
     aur_versions = query_aur(unmodified_pkgs)
     pkgs_to_remove = []
 
+    def _print_group(title, items):
+        if items:
+            sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} {title}\n")
+            if isinstance(items[0], tuple):
+                max_pkg_width = max((len(item[0]) for item in items), default=0)
+                max_version_width = max((max(len(item[1]), len(item[2])) for item in items), default=0)
+                for item in items:
+                    sys.stderr.write(f"  -> {item[0]:<{max_pkg_width}} ({item[1]:<{max_version_width}} -> {item[2]:<{max_version_width}})\n")
+            else:
+                for item in items:
+                    sys.stderr.write(f"  -> {item}\n")
+
+    vcs_rem = []
+    upgrades = []
+    skipped = []
+    removals = []
+
     # Priority Check: If a non-git package exists in repo but a -git variant is installed,
     # auto-remove the non-git package to prevent conflicts and prioritize VCS versions.
     for pkg in unmodified_pkgs:
         if not pkg.endswith("-git"):
             if is_installed(f"{pkg}-git"):
-                sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Installed VCS package '{c_bold}{pkg}-git{c_reset}' takes priority over non-git '{c_bold}{pkg}{c_reset}' in {repo_name}. Removing non-git package...\n")
+                vcs_rem.append(pkg)
                 pkgs_to_remove.append(pkg)
 
     # Optimization: Use pure-Python alpm_vercmp to avoid subprocess overhead entirely
@@ -216,13 +258,18 @@ def main():
             if res > 0:
                 if is_installed(pkg):
                     if auto_update_installed:
-                        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Auto-upgrading installation...\n")
+                        upgrades.append((pkg, local_ver, aur_ver))
                         pkgs_to_remove.append(pkg)
                     else:
-                        sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of installed package '{c_bold}{pkg}{c_reset}' found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade.\n")
+                        skipped.append((pkg, local_ver, aur_ver))
                 else:
-                    sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer version {c_bold}{aur_ver}{c_reset} of public package '{c_bold}{pkg}{c_reset}' found in AUR (local repo has {c_bold}{local_ver}{c_reset}). Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade...\n")
+                    removals.append((pkg, local_ver, aur_ver))
                     pkgs_to_remove.append(pkg)
+
+    _print_group(f"Removing {len(vcs_rem)} non-git package(s) (installed VCS takes priority):", vcs_rem)
+    _print_group(f"Auto-upgrading {len(upgrades)} installed package(s) from AUR:", upgrades)
+    _print_group(f"Skipping {len(skipped)} AUR upgrade(s) (auto-update disabled):", skipped)
+    _print_group(f"Removing {len(removals)} package(s) from {c_bold}{repo_name}{c_reset} to trigger upgrade:", removals)
 
     # Optimization: Batch repo-remove operations to reduce subprocess overhead
     if pkgs_to_remove:

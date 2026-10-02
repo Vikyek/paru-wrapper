@@ -45,9 +45,10 @@ if [[ $GITTINATOR -eq 1 ]]; then
 
     if [[ -n "$INSTALLED_PKGS" ]]; then
         CANDIDATES=()
-        for pkg in $INSTALLED_PKGS; do
-            CANDIDATES+=("${pkg}-git")
-        done
+        while IFS= read -r pkg; do
+           [[ -z "$pkg" ]] && continue
+           CANDIDATES+=("${pkg}-git")
+        done < <(pacman -Qqe | grep -vE '\-(git|svn|hg|bzr)$' || true)
 
         echo "--> Querying AUR API for available -git counterparts..."
         FOUND_GIT_PKGS=()
@@ -61,13 +62,9 @@ if [[ $GITTINATOR -eq 1 ]]; then
             done
 
             RESPONSE=$(curl -G -s "https://aur.archlinux.org/rpc/v5/info" "${CURL_ARGS[@]}")
-            MATCHES=$(echo "$RESPONSE" | jq -r '.results[].Name' 2>/dev/null || true)
-
-            for match in $MATCHES; do
-                if [[ -n "$match" && "$match" != "null" ]]; then
-                    FOUND_GIT_PKGS+=("$match")
-                fi
-            done
+            # Performance Optimization: Offload JSON parsing and array assignment to jq and eval
+            # to eliminate slow O(N) bash while-read loop overhead.
+            eval "$(echo "$RESPONSE" | jq -r '.results[]? | select(.Name != null and .Name != "") | "FOUND_GIT_PKGS+=(\(.Name | @sh))"' 2>/dev/null || true)"
         done
 
         if [[ ${#FOUND_GIT_PKGS[@]} -gt 0 ]]; then
