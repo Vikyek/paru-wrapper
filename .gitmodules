@@ -1,0 +1,4 @@
+[submodule "vendor/rebuild-check-hook"]
+	path = vendor/rebuild-check-hook
+	url = git@github.com:Vikyek/rebuild-check-hook.git
+	recurse = true
