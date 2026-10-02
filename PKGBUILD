@@ -15,6 +15,7 @@ depends=(
     'curl'
     'git'
     'sudo'
+    'coreutils'
 )
 optdepends=(
     'pacman: Arch Linux package manager'

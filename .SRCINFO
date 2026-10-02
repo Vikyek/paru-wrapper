@@ -13,6 +13,7 @@ pkgbase = paru-wrapper
 	depends = curl
 	depends = git
 	depends = sudo
+	depends = coreutils
 	optdepends = pacman: Arch Linux package manager
 	optdepends = make: System build tools
 	optdepends = snapper: For pre/post btrfs snapshots
