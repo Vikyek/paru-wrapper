@@ -138,6 +138,8 @@ def get_mkvpkg_packages_and_versions():
     Returns a dictionary of {pkg_name: version} for all packages in the repo.
     Uses 'pacman -Sl <repo>' to get all packages and versions in a single subprocess call,
     avoiding the N+1 query problem of calling 'pacman -Si' for every package.
+
+    @returns Dictionary of package names to version strings
     """
     if not repo_name:
         return {}
