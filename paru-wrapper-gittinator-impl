@@ -45,9 +45,10 @@ if [[ $GITTINATOR -eq 1 ]]; then
 
     if [[ -n "$INSTALLED_PKGS" ]]; then
         CANDIDATES=()
-        for pkg in $INSTALLED_PKGS; do
-            CANDIDATES+=("${pkg}-git")
-        done
+        while IFS= read -r pkg; do
+           [[ -z "$pkg" ]] && continue
+           CANDIDATES+=("${pkg}-git")
+        done < <(pacman -Qqe | grep -vE '\-(git|svn|hg|bzr)$' || true)
 
         echo "--> Querying AUR API for available -git counterparts..."
         FOUND_GIT_PKGS=()

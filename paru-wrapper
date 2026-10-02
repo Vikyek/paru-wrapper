@@ -69,11 +69,13 @@ fetch_aur_metadata_batch() {
 
         curl_out=$(curl -s -f -G "https://aur.archlinux.org/rpc/v5/info" "${query_args[@]}" 2>/dev/null) || continue
 
-        while IFS=$'\t' read -r name version; do
-            if [[ -n "$name" && "$name" != "null" ]]; then
-                _aur_pkgs_cache["$name"]="$version"
-            fi
-        done < <(echo "$curl_out" | jq -r '.results[]? | "\(.Name)\t\(.Version)"' 2>/dev/null)
+        # Performance Optimization: Offload text processing to jq and evaluate once.
+        # This converts the O(N) bash while-read loop over curl output into an O(1) bulk evaluation,
+        # avoiding string comparison overhead in pure bash.
+        eval "$(echo "$curl_out" | jq -r '
+            .results[]? | select(.Name != null and .Name != "") |
+            "_aur_pkgs_cache[\(.Name | @sh)]=\(.Version | @sh)"
+        ' 2>/dev/null)"
     done
 }
 
@@ -85,11 +87,11 @@ purge_broken_clones() {
     local cleaned=0
     for d in "$PARU_CLONE_DIR"/*/; do
         [[ -d "$d" ]] || continue
-        if [[ ! -d "${d}.git" ]]; then
+        if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
             local pkg_name
             pkg_name=$(basename "$d")
-            msg_info "Purging corrupted clone cache: $pkg_name (missing .git)"
-            rm -rf "$d"
+            msg_info "Purging corrupted clone cache: $pkg_name (corrupted or missing .git)"
+            rm -rf "${d%/}"
             ((cleaned++)) || true
         fi
     done
@@ -114,11 +116,11 @@ run_paru_with_clone_repair() {
             if [[ -d "$PARU_CLONE_DIR" ]]; then
                 for d in "$PARU_CLONE_DIR"/*/; do
                     [[ -d "$d" ]] || continue
-                    if [[ ! -d "${d}.git" ]]; then
+                    if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
                         local pkg_name
                         pkg_name=$(basename "$d")
                         msg_info "Auto-repairing corrupted clone cache: $pkg_name (attempt $attempt/$max_retries)"
-                        rm -rf "$d"
+                        rm -rf "${d%/}"
                         repaired=true
                     fi
                 done
@@ -147,9 +149,9 @@ if [ -f "$HOME/.config/paru-wrapper/paru-wrapper.conf" ]; then
 fi
 
 # Apply configurable fallbacks (Environment > Config > Defaults)
-PARU_WRAPPER_REPO="${PARU_WRAPPER_REPO:-MKVPKG}"
-PARU_WRAPPER_REPO_DIR="${PARU_WRAPPER_REPO_DIR:-/mnt/v/Data/makepkg/packages}"
-PARU_WRAPPER_REPO_DB="${PARU_WRAPPER_REPO_DB:-${PARU_WRAPPER_REPO_DIR}/MKVPKG.db.tar.gz}"
+PARU_WRAPPER_REPO="${PARU_WRAPPER_REPO:-}"
+PARU_WRAPPER_REPO_DIR="${PARU_WRAPPER_REPO_DIR:-}"
+PARU_WRAPPER_REPO_DB="${PARU_WRAPPER_REPO_DB:-${PARU_WRAPPER_REPO_DIR:+${PARU_WRAPPER_REPO_DIR}/${PARU_WRAPPER_REPO}.db.tar.gz}}"
 PARU_WRAPPER_PROJECTS_DIR="${PARU_WRAPPER_PROJECTS_DIR:-${HOME:-/root}/Projects}"
 PARU_WRAPPER_DRY_RUN="${PARU_WRAPPER_DRY_RUN:-false}"
 PARU_WRAPPER_AUTO_UPDATE_INSTALLED="${PARU_WRAPPER_AUTO_UPDATE_INSTALLED:-true}"
@@ -309,10 +311,10 @@ if [ "$is_transaction" = true ]; then
     if [ "$is_anneal" = true ] || [ "${FORCE_REBUILD:-0}" = "1" ]; then
         # Disable selected hooks to prevent snapper/completion/rebuild-check spam during intermediate package installations
         msg_info "Temporarily disabling redundant hooks..."
-        sudo ln -sf /dev/null /etc/pacman.d/hooks/05-snap-pac-pre.hook
-        sudo ln -sf /dev/null /etc/pacman.d/hooks/zz-snap-pac-post.hook
-        sudo ln -sf /dev/null /etc/pacman.d/hooks/paru-completion-update.hook
-        sudo ln -sf /dev/null /etc/pacman.d/hooks/rebuild-check.hook
+        sudo ln -sf -T /dev/null /etc/pacman.d/hooks/05-snap-pac-pre.hook
+        sudo ln -sf -T /dev/null /etc/pacman.d/hooks/zz-snap-pac-post.hook
+        sudo ln -sf -T /dev/null /etc/pacman.d/hooks/paru-completion-update.hook
+        sudo ln -sf -T /dev/null /etc/pacman.d/hooks/rebuild-check.hook
         hooks_disabled=true
     fi
 
@@ -396,14 +398,24 @@ if [ "$is_transaction" = true ]; then
     fi
 
     # Extract target packages and other arguments
+    # Flags that consume the next argument as a value (not a package name)
+    _value_flags='--overwrite|--ignore|--ignoregroup|--cachedir|--config|--dbpath|--gpgdir|--hookdir|--logfile|--arch|--color|--assume-installed'
     targets=()
     other_args=()
     is_rebuild_cmd=false
+    _expect_value=false
     for arg in "$@"; do
-        if [[ "$arg" =~ ^- ]]; then
+        if [[ "$_expect_value" == true ]]; then
+            other_args+=("$arg")
+            _expect_value=false
+        elif [[ "$arg" =~ ^- ]]; then
             other_args+=("$arg")
             if [[ "$arg" == "--rebuild" || "$arg" == "--redownload" ]]; then
                 is_rebuild_cmd=true
+            fi
+            # If flag takes a separate value arg, consume next arg too
+            if [[ "$arg" =~ ^($_value_flags)$ ]]; then
+                _expect_value=true
             fi
         else
             targets+=("$arg")
@@ -526,12 +538,12 @@ if [ "$is_transaction" = true ]; then
         tmp_total=$(mktemp "$CACHE_DIR/paru_total_packages.XXXXXX" 2>/dev/null || true)
         if [ -n "$tmp_total" ]; then
             echo "$total_pkgs" > "$tmp_total"
-            mv -f "$tmp_total" "$CACHE_DIR/paru_total_packages"
+            mv -f -T "$tmp_total" "$CACHE_DIR/paru_total_packages"
         fi
         tmp_comp=$(mktemp "$CACHE_DIR/paru_completed_packages.XXXXXX" 2>/dev/null || true)
         if [ -n "$tmp_comp" ]; then
             echo "0" > "$tmp_comp"
-            mv -f "$tmp_comp" "$CACHE_DIR/paru_completed_packages"
+            mv -f -T "$tmp_comp" "$CACHE_DIR/paru_completed_packages"
         fi
     else
         rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
@@ -544,25 +556,36 @@ if [ "$is_transaction" = true ]; then
         # 3. Find dependencies of the new versions of the upgraded packages
         new_deps=""
         if [[ -n "$upgrades" ]]; then
-            # Query pacman sync database for repository packages dependencies
-            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | awk '/^(Depends On|Depends)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
+            # Query pacman sync database for repository packages dependencies (including make dependencies if available)
+            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps|Check Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
             
-            # Query AUR RPC (or paru info) for AUR package dependencies
+            # Query AUR RPC (or paru info) for AUR package dependencies and makedepends
             aur_deps=""
-            aur_upgrades=$(echo "$upgrades" | grep -vFf <(pacman -Slq 2>/dev/null) || true)
+            # Exclude packages from official repositories, but include custom local repository targets in AUR checks
+            local_repo_pattern="${PARU_WRAPPER_REPO:-}"
+            if [[ -n "$local_repo_pattern" ]]; then
+                official_pkgs_list=$(pacman -Sl 2>/dev/null | awk -v repo="$local_repo_pattern" '$1 != repo { print $2 }')
+            else
+                official_pkgs_list=$(pacman -Slq 2>/dev/null)
+            fi
+            aur_upgrades=$(echo "$upgrades" | grep -vFf <(echo "$official_pkgs_list") || true)
             if [[ -n "$aur_upgrades" ]]; then
-                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru -Si 2>/dev/null | awk '/^(Depends On|Depends)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
+                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru --aur -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps|Check Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//' | sort -u || true)
             fi
 
             new_deps=$(echo -e "${repo_deps}\n${aur_deps}" | sort -u)
         fi
 
         # 4. Filter out any orphans that are in new_deps
-        # Pad with newlines to ensure exact matching using pure bash, avoiding O(N) subprocess forks
-        new_deps_padded=$'\n'"$new_deps"$'\n'
+        # Performance Optimization: Populate an associative array to avoid O(N*M) slow string substring matching loop.
+        declare -A new_deps_map=()
+        while IFS= read -r dep; do
+            [[ -n "$dep" ]] && new_deps_map["$dep"]=1
+        done <<< "$new_deps"
+
         orphans_to_remove=()
         for orphan in $orphans; do
-            if [[ "$new_deps_padded" == *$'\n'"$orphan"$'\n'* ]]; then
+            if [[ "${new_deps_map[$orphan]+isset}" ]]; then
                 msg_info "Preserving orphan package '$orphan' (will be needed by incoming updates)."
             else
                 orphans_to_remove+=("$orphan")
@@ -651,14 +674,14 @@ if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ] && [ "${hooks_dis
         fi
     fi
 fi
-# Optional agy-syncvault integration
+# Optional post-transaction hook integration
 if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ]; then
     # Resolve SUDO_USER or USER home directory safely
     INVOKING_USER="${SUDO_USER:-$USER}"
     RUN_USER_HOME=$(getent passwd "$INVOKING_USER" | cut -d: -f6)
     VAULT_SYNC_SCRIPT="${RUN_USER_HOME}/.gemini/config/scripts/auto_sync_vault.py"
     if [ -f "$VAULT_SYNC_SCRIPT" ]; then
-        msg_info "Triggering agy-syncvault background sync..."
+        msg_info "Triggering post-transaction background sync..."
         runuser -u "$INVOKING_USER" -- python3 "$VAULT_SYNC_SCRIPT" >/dev/null 2>&1 &
     fi
 fi
