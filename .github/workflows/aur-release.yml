@@ -66,7 +66,7 @@ jobs:
           namcap *.pkg.tar.zst
 
       - name: Upload Package Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: built-package
           path: "*.pkg.tar.zst"
