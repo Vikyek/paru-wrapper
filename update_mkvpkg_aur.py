@@ -138,6 +138,8 @@ def get_mkvpkg_packages_and_versions():
     Returns a dictionary of {pkg_name: version} for all packages in the repo.
     Uses 'pacman -Sl <repo>' to get all packages and versions in a single subprocess call,
     avoiding the N+1 query problem of calling 'pacman -Si' for every package.
+
+    @returns Dictionary of package names to their corresponding versions
     """
     if not repo_name:
         return {}
@@ -159,6 +161,7 @@ def query_aur(packages):
 
     @param packages - List of package names to query
     @returns Dictionary of package names to version strings
+    @throws RuntimeError When the remote RPC endpoint cannot be reached or returns invalid data
     """
     results = {}
     for i in range(0, len(packages), 50):
