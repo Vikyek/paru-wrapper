@@ -161,6 +161,7 @@ def query_aur(packages):
 
     @param packages - List of package names to query
     @returns Dictionary of package names to version strings
+    @throws {RuntimeError} When the remote RPC endpoint cannot be reached or parsing fails
     """
     results = {}
     for i in range(0, len(packages), 50):
