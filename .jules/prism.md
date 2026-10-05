@@ -15,3 +15,9 @@
 ## 2024-09-18 - Grouping Python Output for Batch Operations
 **Learning:** Found an existing pattern in `update_mkvpkg_aur.py` where a bunch of messages would spam the output for multiple packages. Using lists and formatting the output groups the packages by their actions using the bulleted list pattern `  -> item_name (old_ver -> new_ver)`.
 **Action:** When printing multiple packages (like upgrades/removals) in Python tools, collect all packages into a list and print a grouped summary with an aligned, formatted list to reduce output clutter and improve readability.
+## 2026-09-19 - Group Python list outputs
+**Learning:** Group similar CLI messages into categories and print a summary header followed by an aligned, formatted list (e.g. `  -> pkg (old -> new)`) to avoid jagged walls of text.
+**Action:** Use list buffering in Python to collect items and format them under summary headers when printing.
+## 2024-05-18 - Improve CLI formatting for repetitive lists
+**Learning:** Printing repetitive line-by-line CLI output can cause terminal spam and reduce scannability.
+**Action:** Group repetitive messages into logical categories and use a single summary header followed by an aligned, bulleted list (`-> item (old -> new)`). This keeps the output clean and immediately highlights actions.
