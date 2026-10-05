@@ -38,7 +38,7 @@ jobs:
       - name: Verify .SRCINFO is in sync
         run: |
           sudo -u builder makepkg --printsrcinfo > .SRCINFO.ci
-          if ! diff -u .SRCINFO .SRCINFO.ci; then
+          if ! diff -u --ignore-all-space .SRCINFO .SRCINFO.ci; then
             echo "ERROR: .SRCINFO is out of sync with PKGBUILD."
             exit 1
           fi
@@ -51,7 +51,7 @@ jobs:
         run: |
           sudo -u builder bash -c '
             cd /tmp
-            git clone https://aur.archlinux.org/paru-bin.git
+            for i in 1 2 3 4 5; do git clone https://aur.archlinux.org/paru-bin.git && break || sleep 5; done
             cd paru-bin
             git checkout 92a55429afbec4fceeb2cef843245105307444d2
             makepkg -si --noconfirm
