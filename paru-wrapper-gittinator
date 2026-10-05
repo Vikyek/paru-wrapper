@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+SCRIPT_DIR=$(
+    CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" &&
+        pwd
+)
+
+IMPLEMENTATION="${SCRIPT_DIR}/paru-wrapper-gittinator-impl"
+
+if [[ ! -x "$IMPLEMENTATION" ]]; then
+    echo "[paru-wrapper] Error: missing Gittinator implementation: $IMPLEMENTATION" >&2
+    exit 1
+fi
+
+NONINTERACTIVE=false
+
+for arg in "$@"; do
+    if [[ "$arg" == "--noconfirm" ]]; then
+        NONINTERACTIVE=true
+        break
+    fi
+done
+
+if [[ "$NONINTERACTIVE" == true ]]; then
+    set +e
+    yes "" | "$IMPLEMENTATION" "$@"
+    implementation_status=${PIPESTATUS[1]}
+    exit "$implementation_status"
+fi
+
+exec "$IMPLEMENTATION" "$@"

@@ -15,3 +15,6 @@
 ## 2026-09-19 - Group Python list outputs
 **Learning:** Group similar CLI messages into categories and print a summary header followed by an aligned, formatted list (e.g. `  -> pkg (old -> new)`) to avoid jagged walls of text.
 **Action:** Use list buffering in Python to collect items and format them under summary headers when printing.
+## 2024-05-18 - Improve CLI formatting for repetitive lists
+**Learning:** Printing repetitive line-by-line CLI output can cause terminal spam and reduce scannability.
+**Action:** Group repetitive messages into logical categories and use a single summary header followed by an aligned, bulleted list (`-> item (old -> new)`). This keeps the output clean and immediately highlights actions.
