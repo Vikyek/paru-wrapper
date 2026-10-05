@@ -12,6 +12,12 @@
 ## 2024-05-19 - Safe In-Place Progress Bars in Shell Wrappers
 **Learning:** Using `echo -ne "\r\033[K..."` is an extremely effective way to create in-place updating progress counters in pure bash. However, it requires safe fallback behavior via `[ -t 2 ]` and `[ -z "${NO_COLOR:-}" ]` to prevent breaking piped scripts, CI environments, and stdout logging (by keeping output on stderr `>&2`).
 **Action:** When implementing CLI progress indicators in raw shell environments, always check if standard error (or stdout if writing there) is connected to a TTY (`-t 2`) and respect `NO_COLOR` before injecting carriage returns and ANSI line-clearing escapes. Provide a clean, non-spammy fallback for non-TTY environments.
+## 2024-09-18 - Grouping Python Output for Batch Operations
+**Learning:** Found an existing pattern in `update_mkvpkg_aur.py` where a bunch of messages would spam the output for multiple packages. Using lists and formatting the output groups the packages by their actions using the bulleted list pattern `  -> item_name (old_ver -> new_ver)`.
+**Action:** When printing multiple packages (like upgrades/removals) in Python tools, collect all packages into a list and print a grouped summary with an aligned, formatted list to reduce output clutter and improve readability.
+## 2026-09-19 - Group Python list outputs
+**Learning:** Group similar CLI messages into categories and print a summary header followed by an aligned, formatted list (e.g. `  -> pkg (old -> new)`) to avoid jagged walls of text.
+**Action:** Use list buffering in Python to collect items and format them under summary headers when printing.
 ## 2024-05-18 - Improve CLI formatting for repetitive lists
 **Learning:** Printing repetitive line-by-line CLI output can cause terminal spam and reduce scannability.
 **Action:** Group repetitive messages into logical categories and use a single summary header followed by an aligned, bulleted list (`-> item (old -> new)`). This keeps the output clean and immediately highlights actions.
