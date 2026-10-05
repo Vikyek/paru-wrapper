@@ -234,7 +234,7 @@ def main():
     if vcs_replacements:
         sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Installed VCS packages take priority over non-git variants in {c_bold}{repo_name}{c_reset}. Removing non-git packages:\n")
         for pkg in vcs_replacements:
-            sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset}\n")
+            sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset} -> {c_bold}{pkg}-git{c_reset}\n")
 
     if auto_upgrading:
         sys.stderr.write(f"{c_info}[paru-wrapper]{c_reset} Newer versions found in AUR for installed packages. Auto-upgrading:\n")
