@@ -45,9 +45,10 @@ if [[ $GITTINATOR -eq 1 ]]; then
 
     if [[ -n "$INSTALLED_PKGS" ]]; then
         CANDIDATES=()
-        for pkg in $INSTALLED_PKGS; do
-            CANDIDATES+=("${pkg}-git")
-        done
+        while IFS= read -r pkg; do
+           [[ -z "$pkg" ]] && continue
+           CANDIDATES+=("${pkg}-git")
+        done < <(pacman -Qqe | grep -vE '\-(git|svn|hg|bzr)$' || true)
 
         echo "--> Querying AUR API for available -git counterparts..."
         FOUND_GIT_PKGS=()
@@ -60,7 +61,7 @@ if [[ $GITTINATOR -eq 1 ]]; then
                 CURL_ARGS+=(--data-urlencode "arg[]=${candidate}")
             done
 
-            RESPONSE=$(curl -G -s "https://aur.archlinux.org/rpc/v5/info" "${CURL_ARGS[@]}")
+            RESPONSE=$(curl -s -G "https://aur.archlinux.org/rpc/v5/info" "${CURL_ARGS[@]}")
             MATCHES=$(echo "$RESPONSE" | jq -r '.results[].Name' 2>/dev/null || true)
 
             for match in $MATCHES; do
