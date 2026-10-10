@@ -347,8 +347,7 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
     @patch('update_mkvpkg_aur.is_installed')
     @patch('update_mkvpkg_aur.subprocess.run')
     @patch('update_mkvpkg_aur.alpm_vercmp')
-    def test_main_auto_update_installed_true(self, mock_alpm_vercmp, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
-        update_mkvpkg_aur.auto_update_installed = True
+    def test_main_newer_version_in_aur_removes_from_repo(self, mock_alpm_vercmp, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
         mock_get_pkgs.return_value = {"pkg1": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0"}
 
@@ -358,34 +357,8 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
 
         update_mkvpkg_aur.main()
 
-        # pkg1 removed because auto_update_installed is True
+        # Outdated package in local repo is removed regardless of installation status
         mock_run.assert_any_call(["repo-remove", "-w", "--", "/fake/db.tar.gz", "pkg1"], check=True)
-        update_mkvpkg_aur.auto_update_installed = False # Reset
-
-    @patch('update_mkvpkg_aur.db_path', '/fake/db.tar.gz')
-    @patch('update_mkvpkg_aur.projects_dir', '/fake/projects')
-    @patch('update_mkvpkg_aur.repo_name', 'testrepo')
-    @patch('os.path.exists', return_value=True)
-    @patch('os.path.isdir', return_value=False)
-    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
-    @patch('update_mkvpkg_aur.query_aur')
-    @patch('update_mkvpkg_aur.is_installed')
-    @patch('update_mkvpkg_aur.subprocess.run')
-    @patch('update_mkvpkg_aur.alpm_vercmp')
-    def test_main_auto_update_installed_false(self, mock_alpm_vercmp, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
-        update_mkvpkg_aur.auto_update_installed = False
-        mock_get_pkgs.return_value = {"pkg1": "1.0"}
-        mock_query_aur.return_value = {"pkg1": "2.0"}
-
-        mock_is_installed.side_effect = lambda pkg: pkg == "pkg1"
-
-        mock_alpm_vercmp.return_value = 1
-
-        update_mkvpkg_aur.main()
-
-        # We need to make sure repo-remove is NOT called
-        for call in mock_run.call_args_list:
-            self.assertNotEqual(call[0][0][0], "repo-remove")
 
     @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
     @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
