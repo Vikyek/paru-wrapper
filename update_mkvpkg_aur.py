@@ -14,6 +14,8 @@ import sys
 db_path = os.environ.get("PARU_WRAPPER_REPO_DB", "")
 projects_dir = os.environ.get("PARU_WRAPPER_PROJECTS_DIR", "")
 repo_name = os.environ.get("PARU_WRAPPER_REPO", "")
+auto_update_installed_env = os.environ.get("PARU_WRAPPER_AUTO_UPDATE_INSTALLED", "true").lower()
+auto_update_installed = auto_update_installed_env in ("true", "1", "yes", "on")
 
 def run_cmd(cmd):
     """
@@ -246,20 +248,56 @@ def main():
                 res = 0
 
             if res > 0:
-                public_upgrades.append((pkg, local_ver, aur_ver))
-                pkgs_to_remove.append(pkg)
+                if is_installed(pkg):
+                    if auto_update_installed:
+                        auto_upgrading.append((pkg, local_ver, aur_ver))
+                        pkgs_to_remove.append(pkg)
+                    else:
+                        skipping.append((pkg, local_ver, aur_ver))
+                else:
+                    public_upgrades.append((pkg, local_ver, aur_ver))
+                    pkgs_to_remove.append(pkg)
 
     if vcs_replacements:
         sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} Installed VCS packages take priority over non-git variants in {c_bold}{repo_name}{c_reset}. Removing non-git packages:\n")
         for pkg in vcs_replacements:
             sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset} -> {c_bold}{pkg}-git{c_reset}\n")
 
+    if auto_upgrading:
+        sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} Newer versions found in AUR for installed packages. Auto-upgrading:\n")
+        for pkg, local_ver, aur_ver in auto_upgrading:
+            sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset} ({local_ver} -> {c_bold}{aur_ver}{c_reset})\n")
+
+    if skipping:
+        sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} Newer versions found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade:\n")
+        for pkg, local_ver, aur_ver in skipping:
+            sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset} ({local_ver} -> {c_bold}{aur_ver}{c_reset})\n")
+
     if public_upgrades:
-        sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} Newer versions found in AUR for packages in {c_bold}{repo_name}{c_reset}. Removing from local repo to trigger upgrade:\n")
+        sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} Newer versions found in AUR for public packages. Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade:\n")
         for pkg, local_ver, aur_ver in public_upgrades:
             sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset} ({local_ver} -> {c_bold}{aur_ver}{c_reset})\n")
 
     # Optimization: Batch repo-remove operations to reduce subprocess overhead
+    if pkgs_to_remove:
+        # Re-read and revalidate package versions in repo to prevent removing newly indexed builds
+        current_repo_versions = get_mkvpkg_packages_and_versions()
+        validated_pkgs_to_remove = []
+        for pkg in pkgs_to_remove:
+            if pkg in vcs_replacements:
+                validated_pkgs_to_remove.append(pkg)
+                continue
+            cur_ver = current_repo_versions.get(pkg)
+            aur_v = aur_versions.get(pkg)
+            if cur_ver and aur_v:
+                try:
+                    if alpm_vercmp(aur_v, cur_ver) > 0:
+                        validated_pkgs_to_remove.append(pkg)
+                except Exception:
+                    pass
+
+        pkgs_to_remove = validated_pkgs_to_remove
+
     if pkgs_to_remove:
         try:
             for i in range(0, len(pkgs_to_remove), 100):
