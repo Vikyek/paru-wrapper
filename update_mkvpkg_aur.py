@@ -280,6 +280,25 @@ def main():
 
     # Optimization: Batch repo-remove operations to reduce subprocess overhead
     if pkgs_to_remove:
+        # Re-read and revalidate package versions in repo to prevent removing newly indexed builds
+        current_repo_versions = get_mkvpkg_packages_and_versions()
+        validated_pkgs_to_remove = []
+        for pkg in pkgs_to_remove:
+            if pkg in vcs_replacements:
+                validated_pkgs_to_remove.append(pkg)
+                continue
+            cur_ver = current_repo_versions.get(pkg)
+            aur_v = aur_versions.get(pkg)
+            if cur_ver and aur_v:
+                try:
+                    if alpm_vercmp(aur_v, cur_ver) > 0:
+                        validated_pkgs_to_remove.append(pkg)
+                except Exception:
+                    pass
+
+        pkgs_to_remove = validated_pkgs_to_remove
+
+    if pkgs_to_remove:
         try:
             for i in range(0, len(pkgs_to_remove), 100):
                 batch = pkgs_to_remove[i:i + 100]

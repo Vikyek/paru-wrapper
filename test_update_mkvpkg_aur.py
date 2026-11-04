@@ -329,8 +329,9 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         mock_query_aur.return_value = {"pkg1": "2.0", "pkg2": "2.0"}
         mock_is_installed.return_value = False
 
-        # First call raises Exception, second call returns 1
-        mock_alpm_vercmp.side_effect = [Exception("Comparison failed"), 1]
+        # Initial comparison: pkg1 raises Exception, pkg2 returns 1
+        # Re-validation comparison: pkg2 returns 1
+        mock_alpm_vercmp.side_effect = [Exception("Comparison failed"), 1, 1]
 
         update_mkvpkg_aur.main()
 
@@ -386,6 +387,33 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         # We need to make sure repo-remove is NOT called
         for call in mock_run.call_args_list:
             self.assertNotEqual(call[0][0][0], "repo-remove")
+
+    @patch('update_mkvpkg_aur.db_path', '/fake/db.tar.gz')
+    @patch('update_mkvpkg_aur.projects_dir', '/fake/projects')
+    @patch('update_mkvpkg_aur.repo_name', 'testrepo')
+    @patch('os.path.exists', return_value=True)
+    @patch('os.path.isdir', return_value=False)
+    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    @patch('update_mkvpkg_aur.query_aur')
+    @patch('update_mkvpkg_aur.is_installed')
+    @patch('update_mkvpkg_aur.subprocess.run')
+    @patch('update_mkvpkg_aur.alpm_vercmp')
+    def test_main_revalidate_version_prevents_stale_removal(self, mock_alpm_vercmp, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
+        # Initial scan returns 1.0, but re-validation scan returns 2.0 (new build added in background)
+        mock_get_pkgs.side_effect = [{"pkg1": "1.0"}, {"pkg1": "2.0"}]
+        mock_query_aur.return_value = {"pkg1": "2.0"}
+        mock_is_installed.return_value = False
+
+        # First comparison 2.0 vs 1.0 returns 1 (newer in AUR)
+        # Re-validation comparison 2.0 vs 2.0 returns 0 (not newer)
+        mock_alpm_vercmp.side_effect = [1, 0]
+
+        update_mkvpkg_aur.main()
+
+        # Should not call repo-remove because re-validation showed pkg1 is up-to-date
+        for call in mock_run.call_args_list:
+            if len(call[0]) > 0 and len(call[0][0]) > 0:
+                self.assertNotEqual(call[0][0][0], "repo-remove")
 
     @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
     @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
