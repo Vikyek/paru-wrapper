@@ -138,6 +138,8 @@ def get_mkvpkg_packages_and_versions():
     Returns a dictionary of {pkg_name: version} for all packages in the repo.
     Uses 'pacman -Sl <repo>' to get all packages and versions in a single subprocess call,
     avoiding the N+1 query problem of calling 'pacman -Si' for every package.
+
+    @returns Dictionary of package names to version strings
     """
     if not repo_name:
         return {}
@@ -159,6 +161,7 @@ def query_aur(packages):
 
     @param packages - List of package names to query
     @returns Dictionary of package names to version strings
+    @throws {RuntimeError} When the remote RPC endpoint cannot be reached or parsing fails
     """
     results = {}
     for i in range(0, len(packages), 50):
@@ -216,33 +219,23 @@ def main():
     aur_versions = query_aur(unmodified_pkgs)
     pkgs_to_remove = []
 
-    def _print_group(title, items):
-        if items:
-            sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} {title}\n")
-            if isinstance(items[0], tuple):
-                max_pkg_width = max((len(item[0]) for item in items), default=0)
-                max_version_width = max((max(len(item[1]), len(item[2])) for item in items), default=0)
-                for item in items:
-                    sys.stderr.write(f"  -> {item[0]:<{max_pkg_width}} ({item[1]:<{max_version_width}} -> {item[2]:<{max_version_width}})\n")
-            else:
-                for item in items:
-                    sys.stderr.write(f"  -> {item}\n")
-
-    vcs_rem = []
-    upgrades = []
-    skipped = []
-    removals = []
+    vcs_replacements = []
+    auto_upgrading = []
+    skipping = []
+    public_upgrades = []
 
     # Priority Check: If a non-git package exists in repo but a -git variant is installed,
     # auto-remove the non-git package to prevent conflicts and prioritize VCS versions.
     for pkg in unmodified_pkgs:
         if not pkg.endswith("-git"):
             if is_installed(f"{pkg}-git"):
-                vcs_rem.append(pkg)
+                vcs_replacements.append(pkg)
                 pkgs_to_remove.append(pkg)
 
     # Optimization: Use pure-Python alpm_vercmp to avoid subprocess overhead entirely
     for pkg in unmodified_pkgs:
+        if pkg in vcs_replacements:
+            continue
         aur_ver = aur_versions.get(pkg)
         local_ver = local_versions.get(pkg)
         if aur_ver and local_ver:
@@ -257,20 +250,54 @@ def main():
             if res > 0:
                 if is_installed(pkg):
                     if auto_update_installed:
-                        upgrades.append((pkg, local_ver, aur_ver))
+                        auto_upgrading.append((pkg, local_ver, aur_ver))
                         pkgs_to_remove.append(pkg)
                     else:
-                        skipped.append((pkg, local_ver, aur_ver))
+                        skipping.append((pkg, local_ver, aur_ver))
                 else:
-                    removals.append((pkg, local_ver, aur_ver))
+                    public_upgrades.append((pkg, local_ver, aur_ver))
                     pkgs_to_remove.append(pkg)
 
-    _print_group(f"Removing {len(vcs_rem)} non-git package(s) (installed VCS takes priority):", vcs_rem)
-    _print_group(f"Auto-upgrading {len(upgrades)} installed package(s) from AUR:", upgrades)
-    _print_group(f"Skipping {len(skipped)} AUR upgrade(s) (auto-update disabled):", skipped)
-    _print_group(f"Removing {len(removals)} package(s) from {c_bold}{repo_name}{c_reset} to trigger upgrade:", removals)
+    if vcs_replacements:
+        sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} Installed VCS packages take priority over non-git variants in {c_bold}{repo_name}{c_reset}. Removing non-git packages:\n")
+        for pkg in vcs_replacements:
+            sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset} -> {c_bold}{pkg}-git{c_reset}\n")
+
+    if auto_upgrading:
+        sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} Newer versions found in AUR for installed packages. Auto-upgrading:\n")
+        for pkg, local_ver, aur_ver in auto_upgrading:
+            sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset} ({local_ver} -> {c_bold}{aur_ver}{c_reset})\n")
+
+    if skipping:
+        sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} Newer versions found in AUR, but PARU_WRAPPER_AUTO_UPDATE_INSTALLED is disabled. Skipping auto-upgrade:\n")
+        for pkg, local_ver, aur_ver in skipping:
+            sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset} ({local_ver} -> {c_bold}{aur_ver}{c_reset})\n")
+
+    if public_upgrades:
+        sys.stderr.write(f"\n{c_info}[paru-wrapper]{c_reset} Newer versions found in AUR for public packages. Removing from {c_bold}{repo_name}{c_reset} to trigger upgrade:\n")
+        for pkg, local_ver, aur_ver in public_upgrades:
+            sys.stderr.write(f"  -> {c_bold}{pkg}{c_reset} ({local_ver} -> {c_bold}{aur_ver}{c_reset})\n")
 
     # Optimization: Batch repo-remove operations to reduce subprocess overhead
+    if pkgs_to_remove:
+        # Re-read and revalidate package versions in repo to prevent removing newly indexed builds
+        current_repo_versions = get_mkvpkg_packages_and_versions()
+        validated_pkgs_to_remove = []
+        for pkg in pkgs_to_remove:
+            if pkg in vcs_replacements:
+                validated_pkgs_to_remove.append(pkg)
+                continue
+            cur_ver = current_repo_versions.get(pkg)
+            aur_v = aur_versions.get(pkg)
+            if cur_ver and aur_v:
+                try:
+                    if alpm_vercmp(aur_v, cur_ver) > 0:
+                        validated_pkgs_to_remove.append(pkg)
+                except Exception:
+                    pass
+
+        pkgs_to_remove = validated_pkgs_to_remove
+
     if pkgs_to_remove:
         try:
             for i in range(0, len(pkgs_to_remove), 100):

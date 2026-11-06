@@ -51,7 +51,7 @@ jobs:
         run: |
           sudo -u builder bash -c '
             cd /tmp
-            git clone https://aur.archlinux.org/paru-bin.git
+            for i in 1 2 3 4 5; do git clone https://aur.archlinux.org/paru-bin.git && break || sleep 5; done
             cd paru-bin
             git checkout 92a55429afbec4fceeb2cef843245105307444d2
             makepkg -si --noconfirm
