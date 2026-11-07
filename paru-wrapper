@@ -79,18 +79,34 @@ fetch_aur_metadata_batch() {
     done
 }
 
-# Purge corrupted paru clone cache directories (missing .git)
+# Purge corrupted paru clone cache directories (missing/broken .git or unreadable objects)
 PARU_CLONE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/paru/clone"
+
+is_broken_clone() {
+    local d="$1"
+    [[ -d "$d" ]] || return 1
+    # Check 1: Must be a recognizable git repository
+    if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
+        return 0
+    fi
+    # Check 2: If HEAD exists, it must be valid and reset without missing object errors
+    if git -C "$d" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+        if ! git -C "$d" reset --hard -q HEAD >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
+}
 
 purge_broken_clones() {
     [[ -d "$PARU_CLONE_DIR" ]] || return 0
     local cleaned=0
     for d in "$PARU_CLONE_DIR"/*/; do
         [[ -d "$d" ]] || continue
-        if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
+        if is_broken_clone "$d"; then
             local pkg_name
             pkg_name=$(basename "$d")
-            msg_info "Purging corrupted clone cache: $pkg_name (corrupted or missing .git)"
+            msg_info "Purging corrupted clone cache: $pkg_name (corrupted or missing git objects)"
             rm -rf "${d%/}"
             ((cleaned++)) || true
         fi
@@ -116,7 +132,7 @@ run_paru_with_clone_repair() {
             if [[ -d "$PARU_CLONE_DIR" ]]; then
                 for d in "$PARU_CLONE_DIR"/*/; do
                     [[ -d "$d" ]] || continue
-                    if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
+                    if is_broken_clone "$d"; then
                         local pkg_name
                         pkg_name=$(basename "$d")
                         msg_info "Auto-repairing corrupted clone cache: $pkg_name (attempt $attempt/$max_retries)"
