@@ -38,6 +38,7 @@ paru-wrapper/
 ├── default-plugins/         # Modular plugin hooks for optional integrations
 │   ├── 10-snapper.sh        # Pre/post transaction btrfs snapshots
 │   ├── 20-anneal.sh         # Automatic rebuild queue unmarking
+│   ├── 25-projects-pull.sh  # Pre-transaction upstream updates for Projects package repos
 │   ├── 30-rebuild-check.sh  # Post-upgrade shared library rebuild detector
 │   ├── 40-paru-completion.sh# Post-transaction shell completion cache generator
 │   └── 50-vault-sync.sh     # Background config sync pass

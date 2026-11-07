@@ -37,6 +37,7 @@ Modular Plugins:
     Default plugins:
       10-snapper.sh         Pre/post btrfs snapshots (requires snapper)
       20-anneal.sh          Rebuild queue unmarking (requires anneal)
+      25-projects-pull.sh   Pre-transaction upstream updates for package repositories in Projects
       30-rebuild-check.sh   Post-upgrade rebuild detection (rebuild-check-hook)
       40-paru-completion.sh Shell completion cache updates (paru-completion-hook)
       50-vault-sync.sh      Background private config sync pass

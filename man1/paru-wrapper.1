@@ -50,6 +50,9 @@ Pre/post transaction Btrfs snapshots (requires \fBsnapper\fR).
 .B 20-anneal.sh
 Automatically unmarks packages from the rebuild queue upon recompilation (requires \fBanneal\fR).
 .TP
+.B 25-projects-pull.sh
+Fetches fast-forward updates for git repositories residing in \fIPARU_WRAPPER_PROJECTS_DIR\fR before running local builds.
+.TP
 .B 30-rebuild-check.sh
 Analyzes installed packages for broken shared library bindings after system updates (requires \fBrebuild-check-hook\fR).
 .TP
