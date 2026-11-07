@@ -45,6 +45,58 @@ fi
 msg_info() { echo -e "${C_INFO}[paru-wrapper]${C_RESET} $*" >&2; }
 msg_warn() { echo -e "${C_WARN}[paru-wrapper] Warning:${C_RESET} $*" >&2; }
 
+# Plugin Hook Dispatcher
+# Plugins are located in:
+#  - User overrides: $XDG_CONFIG_HOME/paru-wrapper/plugins.d or ~/.config/paru-wrapper/plugins.d
+#  - System config:  /etc/paru-wrapper/plugins.d
+#  - System plugins: /usr/lib/paru-wrapper/plugins.d
+#  - Local fallback: $(dirname $0)/default-plugins
+dispatch_plugin_hooks() {
+    local event="$1"
+    shift
+    local plugin_dirs=()
+
+    if [ -n "${XDG_CONFIG_HOME:-}" ] && [ -d "${XDG_CONFIG_HOME}/paru-wrapper/plugins.d" ]; then
+        plugin_dirs+=("${XDG_CONFIG_HOME}/paru-wrapper/plugins.d")
+    elif [ -n "${HOME:-}" ] && [ -d "${HOME}/.config/paru-wrapper/plugins.d" ]; then
+        plugin_dirs+=("${HOME}/.config/paru-wrapper/plugins.d")
+    fi
+
+    if [ -d "/etc/paru-wrapper/plugins.d" ]; then
+        plugin_dirs+=("/etc/paru-wrapper/plugins.d")
+    fi
+
+    if [ -d "/usr/lib/paru-wrapper/plugins.d" ]; then
+        plugin_dirs+=("/usr/lib/paru-wrapper/plugins.d")
+    fi
+
+    local local_dir
+    local_dir="$(dirname "$(readlink -f "$0")")/default-plugins"
+    if [ -d "$local_dir" ]; then
+        plugin_dirs+=("$local_dir")
+    fi
+
+    declare -A executed_plugins=()
+    for dir in "${plugin_dirs[@]}"; do
+        for plugin in "$dir"/*.sh; do
+            [ -f "$plugin" ] || continue
+            local p_name
+            p_name=$(basename "$plugin")
+            [ -n "${executed_plugins[$p_name]:-}" ] && continue
+            executed_plugins["$p_name"]=1
+
+            (
+                # Run hook in subshell to avoid polluting global state
+                # shellcheck disable=SC1090
+                source "$plugin"
+                if declare -F plugin_hook >/dev/null; then
+                    plugin_hook "$event" "$@"
+                fi
+            ) || true
+        done
+    done
+}
+
 
 declare -gA _aur_pkgs_cache=()
 
@@ -383,16 +435,8 @@ if [ "$is_transaction" = true ]; then
     }
     trap cleanup_hooks EXIT INT TERM
 
-    # Take a single manual pre-transaction snapper snapshot
-    if [ "$hooks_disabled" = true ] && command -v snapper >/dev/null; then
-        if [ "$DRY_RUN" = true ]; then
-            msg_info "DRY RUN: would take pre-transaction snapper snapshot"
-            PRE_SNAP_ID=""
-        else
-            PRE_SNAP_ID=$(sudo snapper -c root create -d "paru-wrapper pre-transaction" -t pre -p)
-            export PRE_SNAP_ID
-        fi
-    fi
+    # Dispatch pre-transaction plugin hooks (e.g. filesystem snapshotting)
+    dispatch_plugin_hooks pre-transaction
 
     # Prune outdated unmodified packages from custom repo using helper script to trigger upgrades from AUR
     if [ -n "$PARU_WRAPPER_REPO" ]; then
@@ -500,10 +544,7 @@ if [ "$is_transaction" = true ]; then
                         msg_info "DRY RUN: would run: (cd \"${PARU_WRAPPER_PROJECTS_DIR}/${pkg}\" && makepkg -sfi --noconfirm)"
                     else
                         if (cd "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}" && makepkg -sfi --noconfirm); then
-                            if command -v anneal >/dev/null; then
-                                msg_info "Unmarking '$pkg' in anneal rebuild queue..."
-                                sudo anneal unmark "$pkg" 2>/dev/null || true
-                            fi
+                            dispatch_plugin_hooks package-rebuilt "$pkg"
                         fi
                     fi
                 else
@@ -518,10 +559,7 @@ if [ "$is_transaction" = true ]; then
                     build_dir=$(mktemp -d)
                     if git clone --depth 1 "https://aur.archlinux.org/$pkg.git" "$build_dir" 2>/dev/null; then
                         if (cd "$build_dir" && makepkg -sfi --noconfirm); then
-                            if command -v anneal >/dev/null; then
-                                msg_info "Unmarking '$pkg' in anneal rebuild queue..."
-                                sudo anneal unmark "$pkg" 2>/dev/null || true
-                            fi
+                            dispatch_plugin_hooks package-rebuilt "$pkg"
                         fi
                         rm -rf "$build_dir"
                     else
@@ -664,42 +702,22 @@ if [ "$is_transaction" = true ]; then
     # Disable exit trap since we cleaned up explicitly
     trap - EXIT INT TERM
 
-    # Take a manual post-transaction snapper snapshot
-    if [ "$hooks_disabled" = true ] && [[ -n "${PRE_SNAP_ID:-}" ]]; then
-        if [ "$DRY_RUN" = true ]; then
-            msg_info "DRY RUN: would take post-transaction snapper snapshot."
-        else
-            msg_info "Taking post-transaction snapper snapshot..."
-            sudo snapper -c root create -d "paru-wrapper post-transaction" -t post --pre-number "$PRE_SNAP_ID"
-        fi
-    fi
+    # Dispatch post-transaction plugin hooks (e.g. filesystem snapshotting)
+    dispatch_plugin_hooks post-transaction
 fi
 
 if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ] && [ "${hooks_disabled:-false}" = true ]; then
-    # Trigger deferred hook updates once at the very end
-    msg_info "Running deferred completion and rebuild-check hooks..."
-    if [ "$DRY_RUN" = true ]; then
-        msg_info "DRY RUN: would run paru-completion-update and rebuild-check."
+    # Trigger deferred plugin hooks once at the very end
+    if [ ${#targets[@]} -gt 0 ]; then
+        dispatch_plugin_hooks deferred-hooks "${targets[@]}"
     else
-        sudo /usr/bin/paru-completion-update || true
-        # Prevent unbound variable error on $targets if it's empty
-        if [ ${#targets[@]} -gt 0 ]; then
-            echo "${targets[@]}" | sudo /usr/bin/rebuild-check || true
-        else
-            sudo /usr/bin/rebuild-check || true
-        fi
+        dispatch_plugin_hooks deferred-hooks
     fi
 fi
-# Optional post-transaction hook integration
+
+# Optional post-transaction background plugin hooks (e.g. vault sync)
 if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ]; then
-    # Resolve SUDO_USER or USER home directory safely
-    INVOKING_USER="${SUDO_USER:-$USER}"
-    RUN_USER_HOME=$(getent passwd "$INVOKING_USER" | cut -d: -f6)
-    VAULT_SYNC_SCRIPT="${RUN_USER_HOME}/.gemini/config/scripts/auto_sync_vault.py"
-    if [ -f "$VAULT_SYNC_SCRIPT" ]; then
-        msg_info "Triggering post-transaction background sync..."
-        runuser -u "$INVOKING_USER" -- python3 "$VAULT_SYNC_SCRIPT" >/dev/null 2>&1 &
-    fi
+    dispatch_plugin_hooks post-transaction-bg
 fi
 
 exit ${exit_code:-0}

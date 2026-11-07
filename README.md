@@ -35,11 +35,29 @@ paru-wrapper/
 ├── pacman-wrapper           # Secondary wrapper for direct pacman calls
 ├── update_mkvpkg_aur.py     # Python engine for local repo sync & version checks
 ├── test_update_mkvpkg_aur.py# Unit test suite for version comparison & repo logic
+├── default-plugins/         # Modular plugin hooks for optional integrations
+│   ├── 10-snapper.sh        # Pre/post transaction btrfs snapshots
+│   ├── 20-anneal.sh         # Automatic rebuild queue unmarking
+│   ├── 30-rebuild-check.sh  # Post-upgrade shared library rebuild detector
+│   ├── 40-paru-completion.sh# Post-transaction shell completion cache generator
+│   └── 50-vault-sync.sh     # Background config sync pass
 ├── install.sh               # Standalone shell installer
 ├── Makefile                 # GNU Make build targets
 ├── PKGBUILD                 # Arch Linux package build recipe
 └── .SRCINFO                 # Generated package metadata
 ```
+
+---
+
+## Modular Plugin System
+
+`paru-wrapper` features a plugin architecture. Optional packages plug in seamlessly without hardcoded dependencies in the core script:
+
+- **Rebuild Check**: Detects installed packages needing rebuilds against updated libraries (`paru -S rebuild-check-hook`).
+- **Shell Completions**: Generates and updates cached CLI completions for bash/zsh/fish (`paru -S paru-completion-hook`).
+- **Snapper Snapshots**: Automatic btrfs snapshots before and after transactions (`pacman -S snapper`).
+- **Anneal Queue**: Automatically marks/unmarks rebuilt packages from the rebuild queue (`paru -S anneal`).
+- **Custom Plugins**: Place custom executable hooks in `/etc/paru-wrapper/plugins.d/` or `~/.config/paru-wrapper/plugins.d/`. Hooks receive events: `pre-transaction`, `post-transaction`, `deferred-hooks`, `package-rebuilt`, and `post-transaction-bg`.
 
 ---
 

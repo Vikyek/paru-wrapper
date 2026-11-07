@@ -197,3 +197,27 @@ installed_version=$(pacman -Q "$pkgname" 2>/dev/null || true)
 
 printf 'Successfully installed %s\n' \
     "${installed_version:-${pkgname} ${pkgver}}"
+
+printf '\n%s\n' "========================================================="
+printf '%s\n' "  paru-wrapper Modular Plugin System Status:"
+printf '%s\n' "========================================================="
+
+check_optdep() {
+    local name="$1"
+    local bin="$2"
+    local pkg="$3"
+    local desc="$4"
+    if command -v "$bin" >/dev/null 2>&1; then
+        printf '  [✓] %-18s (%s) - installed\n' "$name" "$desc"
+    else
+        printf '  [ ] %-18s (%s) - optional, recommended\n' "$name" "$desc"
+        printf '      Install via: paru -S %s\n' "$pkg"
+    fi
+}
+
+check_optdep "rebuild-check" "rebuild-check" "rebuild-check-hook" "Automated shared library rebuild detector"
+check_optdep "paru-completion" "paru-completion-update" "paru-completion-hook" "Cached shell completion generator"
+check_optdep "snapper" "snapper" "snapper" "Btrfs pre/post transaction snapshots"
+check_optdep "anneal" "anneal" "anneal" "Package rebuild queue unmark manager"
+
+printf '%s\n\n' "========================================================="
