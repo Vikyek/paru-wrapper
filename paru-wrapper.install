@@ -19,6 +19,13 @@ post_install() {
     if [ -n "${TARGET_USER:-}" ]; then
         chown -h "${TARGET_USER}:${TARGET_USER}" "${TARGET_HOME}/.local/bin/paru" 2>/dev/null || true
     fi
+
+    echo "==> paru-wrapper supports modular plugin hooks."
+    echo "    Recommended optional plugins:"
+    echo "      - rebuild-check:       sudo paru -S rebuild-check-hook"
+    echo "      - paru-completion:     sudo paru -S paru-completion-hook"
+    echo "      - snapper:             sudo pacman -S snapper"
+    echo "      - anneal:              sudo paru -S anneal"
 }
 
 post_upgrade() {
