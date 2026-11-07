@@ -10,6 +10,51 @@
 
 set -euo pipefail
 
+# Intercept wrapper-specific help
+if [[ "${1:-}" == "--wrapper-help" ]]; then
+    cat << 'EOF'
+paru-wrapper - Custom paru wrapper providing automatic local AUR repository
+management, modular plugin hooks, and --gittinator VCS migrations.
+
+Usage:
+    paru-wrapper [options] <paru arguments...>
+    paru-wrapper --init-repo <repo_name> <repo_dir> <projects_dir>
+    paru-wrapper --connect-repo <repo_name> <repo_dir> <projects_dir>
+    paru-wrapper --wrapper-help
+
+Wrapper Options:
+    --gittinator        Scan installed AUR packages and migrate to -git variants
+    --init-repo         Initialize an empty custom local pacman repository
+    --connect-repo      Connect to an existing custom local pacman repository
+    --wrapper-help      Display this paru-wrapper extended help message
+
+Modular Plugins:
+    Hook directories:
+      - System: /usr/lib/paru-wrapper/plugins.d/
+      - Global: /etc/paru-wrapper/plugins.d/
+      - User:   ~/.config/paru-wrapper/plugins.d/
+
+    Default plugins:
+      10-snapper.sh         Pre/post btrfs snapshots (requires snapper)
+      20-anneal.sh          Rebuild queue unmarking (requires anneal)
+      30-rebuild-check.sh   Post-upgrade rebuild detection (rebuild-check-hook)
+      40-paru-completion.sh Shell completion cache updates (paru-completion-hook)
+      50-vault-sync.sh      Background private config sync pass
+
+Environment Variables:
+    PARU_WRAPPER_REPO                    Custom local repository name (e.g. MKVPKG)
+    PARU_WRAPPER_REPO_DIR                Directory containing custom repository .db
+    PARU_WRAPPER_PROJECTS_DIR            Root path to local package projects (~/Projects)
+    PARU_WRAPPER_AUTO_UPDATE_INSTALLED   Auto-upgrade local packages from AUR (default: 1)
+    PARU_WRAPPER_DRY_RUN                 Simulate operations without executing (default: false)
+    FORCE_REBUILD                        Rebuild package from source (default: 0)
+
+All other arguments and flags are passed directly to upstream paru.
+See 'man paru-wrapper' or 'paru --help' for upstream pacman/paru options.
+EOF
+    exit 0
+fi
+
 # Dispatch the custom Gittinator mode before normal paru processing.
 for arg in "$@"; do
     if [[ "$arg" == "--gittinator" ]]; then
