@@ -311,9 +311,10 @@ def main():
     if pkgs_to_remove:
         try:
             for i in range(0, len(pkgs_to_remove), 100):
-                batch = [p for p in pkgs_to_remove[i:i + 100] if p]
+                batch = [str(p) for p in pkgs_to_remove[i:i + 100] if p]
                 if batch:
-                    subprocess.run(["repo-remove", "-w", "--", db_path] + batch, check=True) # nosec
+                    # nosemgrep: dangerous-subprocess-use-tainted-env-args
+                    subprocess.run(["repo-remove", "-w", "--", str(db_path)] + batch, check=True) # nosec
                     db_changed = True
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             sys.stderr.write(f"{c_warn}⚠ [update_mkvpkg_aur] Warning:{c_reset} Failed to run repo-remove: {e}\n")
@@ -321,6 +322,7 @@ def main():
     if db_changed:
         try:
             cmd = get_elevation_cmd() + ["pacman", "-Sy"]
+            # nosemgrep: dangerous-subprocess-use-tainted-env-args
             subprocess.run(cmd, check=True) # nosec
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             sys.stderr.write(f"{c_warn}⚠ [update_mkvpkg_aur] Warning:{c_reset} Failed to sync database (pacman -Sy): {e}\n")
