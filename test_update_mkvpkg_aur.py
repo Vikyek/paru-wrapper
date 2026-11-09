@@ -241,17 +241,25 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         self.assertEqual(update_mkvpkg_aur.alpm_vercmp("1.0+git", "1.0"), 1)
         self.assertEqual(update_mkvpkg_aur.alpm_vercmp("1.0-2", "1.0-2"), 0)
 
-    @patch('update_mkvpkg_aur.is_installed')
-    @patch('update_mkvpkg_aur.subprocess.run')
-    @patch('update_mkvpkg_aur.query_aur')
-    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    def test_get_elevation_cmd(self):
+        with patch('os.geteuid', return_value=0):
+            self.assertEqual(update_mkvpkg_aur.get_elevation_cmd(), [])
+        with patch('os.geteuid', return_value=1000), patch('shutil.which', return_value='/usr/bin/sudo'):
+            self.assertEqual(update_mkvpkg_aur.get_elevation_cmd(), ["sudo"])
+        with patch('os.geteuid', return_value=1000), patch('shutil.which', return_value=None):
+            self.assertEqual(update_mkvpkg_aur.get_elevation_cmd(), [])
+
     @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
     @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
     @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
     @patch('os.path.exists', return_value=True)
     @patch('os.path.isdir', return_value=False)
+    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    @patch('update_mkvpkg_aur.query_aur')
+    @patch('update_mkvpkg_aur.is_installed')
+    @patch('update_mkvpkg_aur.subprocess.run')
     @patch('update_mkvpkg_aur.alpm_vercmp')
-    def test_main_batched_vercmp(self, mock_alpm_vercmp, mock_isdir, mock_exists, mock_get_pkgs, mock_query_aur, mock_run, mock_is_installed):
+    def test_main_batched_vercmp(self, mock_alpm_vercmp, mock_run, mock_is_installed, mock_query_aur, mock_get_pkgs, mock_isdir, mock_exists):
         mock_is_installed.return_value = False
         mock_get_pkgs.return_value = {"pkg1": "1.0", "pkg2": "1.0"}
         mock_query_aur.return_value = {"pkg1": "2.0", "pkg2": "1.0-1"}
@@ -435,8 +443,8 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         mock_alpm_vercmp.return_value = 1
 
         def run_side_effect(args, **kwargs):
-            if args[0] == "sudo":
-                raise FileNotFoundError("sudo not found")
+            if args[0] in ("sudo", "pacman"):
+                raise FileNotFoundError("command not found")
             return MagicMock(returncode=0)
 
         mock_run.side_effect = run_side_effect

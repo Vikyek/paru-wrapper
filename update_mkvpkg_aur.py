@@ -6,10 +6,20 @@ is available remotely. This triggers a rebuild/upgrade during the next paru sync
 """
 import subprocess
 import os
+import shutil
 import urllib.request
 import urllib.parse
 import json
 import sys
+
+def get_elevation_cmd():
+    """
+    Returns the privilege elevation command list (e.g. ['sudo']) if necessary and available.
+    Returns [] if already running as root or if sudo is not available on PATH.
+    """
+    if os.geteuid() == 0 or not shutil.which("sudo"):
+        return []
+    return ["sudo"]
 
 db_path = os.environ.get("PARU_WRAPPER_REPO_DB", "")
 projects_dir = os.environ.get("PARU_WRAPPER_PROJECTS_DIR", "")
@@ -277,15 +287,17 @@ def main():
     if pkgs_to_remove:
         try:
             for i in range(0, len(pkgs_to_remove), 100):
-                batch = pkgs_to_remove[i:i + 100]
-                subprocess.run(["repo-remove", "-w", "--", db_path] + batch, check=True) # nosec
-                db_changed = True
+                batch = [p for p in pkgs_to_remove[i:i + 100] if p]
+                if batch:
+                    subprocess.run(["repo-remove", "-w", "--", db_path] + batch, check=True) # nosec
+                    db_changed = True
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             sys.stderr.write(f"{c_warn}⚠ [update_mkvpkg_aur] Warning:{c_reset} Failed to run repo-remove: {e}\n")
 
     if db_changed:
         try:
-            subprocess.run(["sudo", "pacman", "-Sy"], check=True) # nosec
+            cmd = get_elevation_cmd() + ["pacman", "-Sy"]
+            subprocess.run(cmd, check=True) # nosec
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             sys.stderr.write(f"{c_warn}⚠ [update_mkvpkg_aur] Warning:{c_reset} Failed to sync database (pacman -Sy): {e}\n")
 
