@@ -69,7 +69,7 @@ purge_broken_clones() {
             local pkg_name
             pkg_name=$(basename "$d")
             msg_info "Purging corrupted clone cache: $pkg_name (missing .git)"
-            rm -rf "$d"
+            rm -rf "${d%/}"
             ((cleaned++)) || true
         fi
     done
@@ -98,7 +98,7 @@ run_paru_with_clone_repair() {
                         local pkg_name
                         pkg_name=$(basename "$d")
                         msg_info "Auto-repairing corrupted clone cache: $pkg_name (attempt $attempt/$max_retries)"
-                        rm -rf "$d"
+                        rm -rf "${d%/}"
                         repaired=true
                     fi
                 done

@@ -42,3 +42,7 @@
 **Vulnerability:** TOCTOU (Time-of-Check to Time-of-Use) symlink overwrite vulnerability when writing files to cache directories.
 **Learning:** Using `[ ! -L file ]` or conditionally recreating a file before directly redirecting output (`echo > file`) still leaves a race condition window open before the shell's `open()` call. This allows an attacker to plant a symlink and overwrite arbitrary files.
 **Prevention:** Securely create a temporary file using `mktemp`, verify it is not empty (`[ -n "$tmp" ]`), write to it, and atomically replace the target using `mv -f`.
+## 2024-05-28 - Arbitrary File Deletion via rm -rf with Trailing Slashes
+**Vulnerability:** Arbitrary file deletion vulnerability when calling `rm -rf` on a directory path containing a trailing slash if that path is a symbolic link.
+**Learning:** When using globbing like `for d in dir/*/`, the resulting `$d` contains a trailing slash. If `$d` happens to be a symbolic link, `rm -rf "$d"` dereferences the link and deletes the contents of the target directory instead of removing the symlink itself.
+**Prevention:** Always strip trailing slashes using parameter expansion (e.g. `rm -rf "${d%/}"`) when passing dynamic directory paths that might be symlinks to `rm -rf`.
