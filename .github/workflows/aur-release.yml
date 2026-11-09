@@ -17,7 +17,7 @@ jobs:
           pacman -Syu --noconfirm git sudo namcap diffutils pacman-contrib
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup non-root builder
         run: |
@@ -38,7 +38,7 @@ jobs:
       - name: Verify .SRCINFO is in sync
         run: |
           sudo -u builder makepkg --printsrcinfo > .SRCINFO.ci
-          if ! diff -u --ignore-all-space .SRCINFO .SRCINFO.ci; then
+          if ! diff -u .SRCINFO .SRCINFO.ci; then
             echo "ERROR: .SRCINFO is out of sync with PKGBUILD."
             exit 1
           fi
@@ -51,7 +51,7 @@ jobs:
         run: |
           sudo -u builder bash -c '
             cd /tmp
-            for i in 1 2 3 4 5; do git clone https://aur.archlinux.org/paru-bin.git && break || sleep 5; done
+            git clone https://aur.archlinux.org/paru-bin.git
             cd paru-bin
             git checkout 92a55429afbec4fceeb2cef843245105307444d2
             makepkg -si --noconfirm
@@ -80,7 +80,7 @@ jobs:
       contents: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -91,7 +91,7 @@ jobs:
           path: ./dist
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           files: ./dist/*.pkg.tar.zst
         env:

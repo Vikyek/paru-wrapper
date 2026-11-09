@@ -10,19 +10,11 @@ license=('GPL-3.0-only')
 depends=(
     'paru'
     'bash'
+    'sudo'
     'python'
     'jq'
     'curl'
     'git'
-    'sudo'
-    'coreutils'
-)
-optdepends=(
-    'pacman: Arch Linux package manager'
-    'make: System build tools'
-    'snapper: For pre/post btrfs snapshots'
-    'rebuild-check: Check for packages needing rebuild'
-    'anneal: Marking/unmarking packages'
 )
 optdepends=(
     'snapper: for pre/post transaction snapshots'
