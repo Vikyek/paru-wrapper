@@ -1,6 +1,6 @@
 pkgbase = paru-wrapper
 	pkgdesc = Custom paru wrapper providing automatic local AUR repo management and --gittinator VCS migrations
-	pkgver = 1.1.2
+	pkgver = 1.2.0
 	pkgrel = 1
 	url = https://github.com/Vikyek/paru-wrapper
 	install = paru-wrapper.install
@@ -18,8 +18,9 @@ pkgbase = paru-wrapper
 	optdepends = make: System build tools
 	optdepends = snapper: For pre/post btrfs snapshots
 	optdepends = rebuild-check: Check for packages needing rebuild
-	optdepends = anneal: Marking/unmarking packages
-	source = paru-wrapper-1.1.2.tar.gz::https://github.com/Vikyek/paru-wrapper/archive/refs/tags/v1.1.2.tar.gz
+	optdepends = paru-completion-hook: For automatic paru bash/zsh/fish completion cache generation
+	optdepends = anneal: Marking/unmarking packages in anneal queue
+	source = paru-wrapper-1.2.0.tar.gz::https://github.com/Vikyek/paru-wrapper/archive/refs/tags/v1.2.0.tar.gz
 	sha256sums = SKIP
 
 pkgname = paru-wrapper

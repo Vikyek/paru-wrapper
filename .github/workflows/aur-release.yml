@@ -85,13 +85,13 @@ jobs:
           fetch-depth: 0
 
       - name: Download Build Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: built-package
           path: ./dist
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ./dist/*.pkg.tar.zst
         env:

@@ -1,0 +1,82 @@
+.TH PARU-WRAPPER 1 "November 2026" "paru-wrapper 1.2.0" "User Commands"
+.SH NAME
+paru-wrapper \- Enhanced paru wrapper with local AUR repository management, modular plugin hooks, and VCS migrations
+.SH SYNOPSIS
+.B paru-wrapper
+[\fIOPTIONS\fR] [\fIPARU_ARGS\fR...]
+.br
+.B paru-wrapper
+\fB\-\-init\-repo\fR \fIREPO_NAME\fR \fIREPO_DIR\fR \fIPROJECTS_DIR\fR
+.br
+.B paru-wrapper
+\fB\-\-connect\-repo\fR \fIREPO_NAME\fR \fIREPO_DIR\fR \fIPROJECTS_DIR\fR
+.br
+.B paru-wrapper
+\fB\-\-wrapper\-help\fR
+.SH DESCRIPTION
+.B paru-wrapper
+is a wrapper around the \fBparu\fR AUR helper and \fBpacman\fR package manager on Arch Linux.
+It automates local custom repository management, performs automated orphan pruning, accelerates batch queries, provides modular plugin hooks, and supports migrating packages to bleeding-edge VCS \fB-git\fR variants via \fB\-\-gittinator\fR.
+.SH OPTIONS
+.TP
+.B \-\-gittinator
+Scans installed AUR packages and migrates them to development VCS (\-git) variants where available.
+.TP
+.B \-\-init\-repo \fIREPO_NAME\fR \fIREPO_DIR\fR \fIPROJECTS_DIR\fR
+Initializes an empty custom local pacman repository database and writes the client configuration to \fI~/.config/paru-wrapper/paru-wrapper.conf\fR.
+.TP
+.B \-\-connect\-repo \fIREPO_NAME\fR \fIREPO_DIR\fR \fIPROJECTS_DIR\fR
+Connects to an existing custom local pacman repository.
+.TP
+.B \-\-wrapper\-help
+Displays the extended help message detailing wrapper-specific options, plugin hooks, and environment variables.
+.SH MODULAR PLUGINS
+.B paru-wrapper
+supports an event-driven plugin hook architecture. Plugins are shell scripts placed in:
+.IP \(bu 2
+\fI~/.config/paru-wrapper/plugins.d/\fR (user-specific overrides)
+.IP \(bu 2
+\fI/etc/paru-wrapper/plugins.d/\fR (system overrides)
+.IP \(bu 2
+\fI/usr/lib/paru-wrapper/plugins.d/\fR (packaged default plugins)
+.PP
+Plugins handle events: \fBpre-transaction\fR, \fBpost-transaction\fR, \fBpackage-rebuilt\fR, \fBdeferred-hooks\fR, and \fBpost-transaction-bg\fR.
+.PP
+Default plugins include:
+.TP
+.B 10-snapper.sh
+Pre/post transaction Btrfs snapshots (requires \fBsnapper\fR).
+.TP
+.B 20-anneal.sh
+Automatically unmarks packages from the rebuild queue upon recompilation (requires \fBanneal\fR).
+.TP
+.B 25-projects-pull.sh
+Fetches fast-forward updates for git repositories residing in \fIPARU_WRAPPER_PROJECTS_DIR\fR before running local builds.
+.TP
+.B 30-rebuild-check.sh
+Analyzes installed packages for broken shared library bindings after system updates (requires \fBrebuild-check-hook\fR).
+.TP
+.B 40-paru-completion.sh
+Regenerates shell tab completion cache files (requires \fBparu-completion-hook\fR).
+.TP
+.B 50-vault-sync.sh
+Background configuration vault synchronization.
+.SH ENVIRONMENT VARIABLES
+.TP
+.B PARU_WRAPPER_AUTO_UPDATE_INSTALLED
+When set to 1 (default), automatically upgrades local custom repository packages when a newer version is discovered in the AUR.
+.TP
+.B PARU_WRAPPER_REPO
+Custom local repository name.
+.TP
+.B PARU_WRAPPER_PROJECTS_DIR
+Path to local development project checkouts (default: \fI~/Projects\fR).
+.TP
+.B FORCE_REBUILD
+When set to 1, forces recompilation of target packages from source.
+.SH SEE ALSO
+.BR paru (8),
+.BR pacman (8),
+.BR makepkg (8)
+.SH AUTHORS
+Maintained by Vikyek <https://github.com/Vikyek/paru-wrapper>.

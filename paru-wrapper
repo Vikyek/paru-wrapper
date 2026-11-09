@@ -10,6 +10,52 @@
 
 set -euo pipefail
 
+# Intercept wrapper-specific help
+if [[ "${1:-}" == "--wrapper-help" ]]; then
+    cat << 'EOF'
+paru-wrapper - Custom paru wrapper providing automatic local AUR repository
+management, modular plugin hooks, and --gittinator VCS migrations.
+
+Usage:
+    paru-wrapper [options] <paru arguments...>
+    paru-wrapper --init-repo <repo_name> <repo_dir> <projects_dir>
+    paru-wrapper --connect-repo <repo_name> <repo_dir> <projects_dir>
+    paru-wrapper --wrapper-help
+
+Wrapper Options:
+    --gittinator        Scan installed AUR packages and migrate to -git variants
+    --init-repo         Initialize an empty custom local pacman repository
+    --connect-repo      Connect to an existing custom local pacman repository
+    --wrapper-help      Display this paru-wrapper extended help message
+
+Modular Plugins:
+    Hook directories:
+      - System: /usr/lib/paru-wrapper/plugins.d/
+      - Global: /etc/paru-wrapper/plugins.d/
+      - User:   ~/.config/paru-wrapper/plugins.d/
+
+    Default plugins:
+      10-snapper.sh         Pre/post btrfs snapshots (requires snapper)
+      20-anneal.sh          Rebuild queue unmarking (requires anneal)
+      25-projects-pull.sh   Pre-transaction upstream updates for package repositories in Projects
+      30-rebuild-check.sh   Post-upgrade rebuild detection (rebuild-check-hook)
+      40-paru-completion.sh Shell completion cache updates (paru-completion-hook)
+      50-vault-sync.sh      Background private config sync pass
+
+Environment Variables:
+    PARU_WRAPPER_REPO                    Custom local repository name (e.g. MKVPKG)
+    PARU_WRAPPER_REPO_DIR                Directory containing custom repository .db
+    PARU_WRAPPER_PROJECTS_DIR            Root path to local package projects (~/Projects)
+    PARU_WRAPPER_AUTO_UPDATE_INSTALLED   Auto-upgrade local packages from AUR (default: 1)
+    PARU_WRAPPER_DRY_RUN                 Simulate operations without executing (default: false)
+    FORCE_REBUILD                        Rebuild package from source (default: 0)
+
+All other arguments and flags are passed directly to upstream paru.
+See 'man paru-wrapper' or 'paru --help' for upstream pacman/paru options.
+EOF
+    exit 0
+fi
+
 # Dispatch the custom Gittinator mode before normal paru processing.
 for arg in "$@"; do
     if [[ "$arg" == "--gittinator" ]]; then
@@ -45,6 +91,58 @@ fi
 msg_info() { echo -e "${C_INFO}[paru-wrapper]${C_RESET} $*" >&2; }
 msg_warn() { echo -e "${C_WARN}[paru-wrapper] Warning:${C_RESET} $*" >&2; }
 
+# Plugin Hook Dispatcher
+# Plugins are located in:
+#  - User overrides: $XDG_CONFIG_HOME/paru-wrapper/plugins.d or ~/.config/paru-wrapper/plugins.d
+#  - System config:  /etc/paru-wrapper/plugins.d
+#  - System plugins: /usr/lib/paru-wrapper/plugins.d
+#  - Local fallback: $(dirname $0)/default-plugins
+dispatch_plugin_hooks() {
+    local event="$1"
+    shift
+    local plugin_dirs=()
+
+    if [ -n "${XDG_CONFIG_HOME:-}" ] && [ -d "${XDG_CONFIG_HOME}/paru-wrapper/plugins.d" ]; then
+        plugin_dirs+=("${XDG_CONFIG_HOME}/paru-wrapper/plugins.d")
+    elif [ -n "${HOME:-}" ] && [ -d "${HOME}/.config/paru-wrapper/plugins.d" ]; then
+        plugin_dirs+=("${HOME}/.config/paru-wrapper/plugins.d")
+    fi
+
+    if [ -d "/etc/paru-wrapper/plugins.d" ]; then
+        plugin_dirs+=("/etc/paru-wrapper/plugins.d")
+    fi
+
+    if [ -d "/usr/lib/paru-wrapper/plugins.d" ]; then
+        plugin_dirs+=("/usr/lib/paru-wrapper/plugins.d")
+    fi
+
+    local local_dir
+    local_dir="$(dirname "$(readlink -f "$0")")/default-plugins"
+    if [ -d "$local_dir" ]; then
+        plugin_dirs+=("$local_dir")
+    fi
+
+    declare -A executed_plugins=()
+    for dir in "${plugin_dirs[@]}"; do
+        for plugin in "$dir"/*.sh; do
+            [ -f "$plugin" ] || continue
+            local p_name
+            p_name=$(basename "$plugin")
+            [ -n "${executed_plugins[$p_name]:-}" ] && continue
+            executed_plugins["$p_name"]=1
+
+            (
+                # Run hook in subshell to avoid polluting global state
+                # shellcheck disable=SC1090
+                source "$plugin"
+                if declare -F plugin_hook >/dev/null; then
+                    plugin_hook "$event" "$@"
+                fi
+            ) || true
+        done
+    done
+}
+
 
 declare -gA _aur_pkgs_cache=()
 
@@ -79,18 +177,34 @@ fetch_aur_metadata_batch() {
     done
 }
 
-# Purge corrupted paru clone cache directories (missing .git)
+# Purge corrupted paru clone cache directories (missing/broken .git or unreadable objects)
 PARU_CLONE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/paru/clone"
+
+is_broken_clone() {
+    local d="$1"
+    [[ -d "$d" ]] || return 1
+    # Check 1: Must be a recognizable git repository
+    if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
+        return 0
+    fi
+    # Check 2: If HEAD exists, it must be valid and reset without missing object errors
+    if git -C "$d" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+        if ! git -C "$d" reset --hard -q HEAD >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
+}
 
 purge_broken_clones() {
     [[ -d "$PARU_CLONE_DIR" ]] || return 0
     local cleaned=0
     for d in "$PARU_CLONE_DIR"/*/; do
         [[ -d "$d" ]] || continue
-        if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
+        if is_broken_clone "$d"; then
             local pkg_name
             pkg_name=$(basename "$d")
-            msg_info "Purging corrupted clone cache: $pkg_name (corrupted or missing .git)"
+            msg_info "Purging corrupted clone cache: $pkg_name (corrupted or missing git objects)"
             rm -rf "${d%/}"
             ((cleaned++)) || true
         fi
@@ -116,7 +230,7 @@ run_paru_with_clone_repair() {
             if [[ -d "$PARU_CLONE_DIR" ]]; then
                 for d in "$PARU_CLONE_DIR"/*/; do
                     [[ -d "$d" ]] || continue
-                    if ! git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
+                    if is_broken_clone "$d"; then
                         local pkg_name
                         pkg_name=$(basename "$d")
                         msg_info "Auto-repairing corrupted clone cache: $pkg_name (attempt $attempt/$max_retries)"
@@ -183,7 +297,7 @@ pkgdesc="Dummy package"
 arch=('any')
 license=('GPL')
 EOF
-        (cd "$DUMMY_DIR" && makepkg -s --noconfirm >/dev/null 2>&1 || true)
+        (cd "$DUMMY_DIR" || exit 1; makepkg -s --noconfirm >/dev/null 2>&1 || true)
         repo-add "$REPO_DB" "$DUMMY_DIR/dummy-1-1-any.pkg.tar.zst" >/dev/null 2>&1 || true
         repo-remove "$REPO_DB" dummy >/dev/null 2>&1 || true
         rm -rf "$DUMMY_DIR"
@@ -367,16 +481,8 @@ if [ "$is_transaction" = true ]; then
     }
     trap cleanup_hooks EXIT INT TERM
 
-    # Take a single manual pre-transaction snapper snapshot
-    if [ "$hooks_disabled" = true ] && command -v snapper >/dev/null; then
-        if [ "$DRY_RUN" = true ]; then
-            msg_info "DRY RUN: would take pre-transaction snapper snapshot"
-            PRE_SNAP_ID=""
-        else
-            PRE_SNAP_ID=$(sudo snapper -c root create -d "paru-wrapper pre-transaction" -t pre -p)
-            export PRE_SNAP_ID
-        fi
-    fi
+    # Dispatch pre-transaction plugin hooks (e.g. filesystem snapshotting)
+    dispatch_plugin_hooks pre-transaction
 
     # Prune outdated unmodified packages from custom repo using helper script to trigger upgrades from AUR
     if [ -n "$PARU_WRAPPER_REPO" ]; then
@@ -484,10 +590,7 @@ if [ "$is_transaction" = true ]; then
                         msg_info "DRY RUN: would run: (cd \"${PARU_WRAPPER_PROJECTS_DIR}/${pkg}\" && makepkg -sfi --noconfirm)"
                     else
                         if (cd "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}" && makepkg -sfi --noconfirm); then
-                            if command -v anneal >/dev/null; then
-                                msg_info "Unmarking '$pkg' in anneal rebuild queue..."
-                                sudo anneal unmark "$pkg" 2>/dev/null || true
-                            fi
+                            dispatch_plugin_hooks package-rebuilt "$pkg"
                         fi
                     fi
                 else
@@ -502,10 +605,7 @@ if [ "$is_transaction" = true ]; then
                     build_dir=$(mktemp -d)
                     if git clone --depth 1 "https://aur.archlinux.org/$pkg.git" "$build_dir" 2>/dev/null; then
                         if (cd "$build_dir" && makepkg -sfi --noconfirm); then
-                            if command -v anneal >/dev/null; then
-                                msg_info "Unmarking '$pkg' in anneal rebuild queue..."
-                                sudo anneal unmark "$pkg" 2>/dev/null || true
-                            fi
+                            dispatch_plugin_hooks package-rebuilt "$pkg"
                         fi
                         rm -rf "$build_dir"
                     else
@@ -557,7 +657,7 @@ if [ "$is_transaction" = true ]; then
         new_deps=""
         if [[ -n "$upgrades" ]]; then
             # Query pacman sync database for repository packages dependencies (including make dependencies if available)
-            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps|Check Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//; /^[Nn]one$/d' | sort -u || true)
+            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps|Make Depends|Check Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//; /^[Nn]one$/d' | sort -u || true)
             
             # Query AUR RPC (or paru info) for AUR package dependencies and makedepends
             aur_deps=""
@@ -570,7 +670,7 @@ if [ "$is_transaction" = true ]; then
             fi
             aur_upgrades=$(echo "$upgrades" | grep -vFf <(echo "$official_pkgs_list") || true)
             if [[ -n "$aur_upgrades" ]]; then
-                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru --aur -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps|Check Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//; /^[Nn]one$/d' | sort -u || true)
+                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru --aur -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps|Make Depends|Check Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//; /^[Nn]one$/d' | sort -u || true)
             fi
 
             new_deps=$(echo -e "${repo_deps}\n${aur_deps}" | sort -u)
@@ -648,42 +748,22 @@ if [ "$is_transaction" = true ]; then
     # Disable exit trap since we cleaned up explicitly
     trap - EXIT INT TERM
 
-    # Take a manual post-transaction snapper snapshot
-    if [ "$hooks_disabled" = true ] && [[ -n "${PRE_SNAP_ID:-}" ]]; then
-        if [ "$DRY_RUN" = true ]; then
-            msg_info "DRY RUN: would take post-transaction snapper snapshot."
-        else
-            msg_info "Taking post-transaction snapper snapshot..."
-            sudo snapper -c root create -d "paru-wrapper post-transaction" -t post --pre-number "$PRE_SNAP_ID"
-        fi
-    fi
+    # Dispatch post-transaction plugin hooks (e.g. filesystem snapshotting)
+    dispatch_plugin_hooks post-transaction
 fi
 
 if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ] && [ "${hooks_disabled:-false}" = true ]; then
-    # Trigger deferred hook updates once at the very end
-    msg_info "Running deferred completion and rebuild-check hooks..."
-    if [ "$DRY_RUN" = true ]; then
-        msg_info "DRY RUN: would run paru-completion-update and rebuild-check."
+    # Trigger deferred plugin hooks once at the very end
+    if [ ${#targets[@]} -gt 0 ]; then
+        dispatch_plugin_hooks deferred-hooks "${targets[@]}"
     else
-        sudo /usr/bin/paru-completion-update || true
-        # Prevent unbound variable error on $targets if it's empty
-        if [ ${#targets[@]} -gt 0 ]; then
-            echo "${targets[@]}" | sudo /usr/bin/rebuild-check || true
-        else
-            sudo /usr/bin/rebuild-check || true
-        fi
+        dispatch_plugin_hooks deferred-hooks
     fi
 fi
-# Optional post-transaction hook integration
+
+# Optional post-transaction background plugin hooks (e.g. vault sync)
 if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ]; then
-    # Resolve SUDO_USER or USER home directory safely
-    INVOKING_USER="${SUDO_USER:-$USER}"
-    RUN_USER_HOME=$(getent passwd "$INVOKING_USER" | cut -d: -f6)
-    VAULT_SYNC_SCRIPT="${RUN_USER_HOME}/.gemini/config/scripts/auto_sync_vault.py"
-    if [ -f "$VAULT_SYNC_SCRIPT" ]; then
-        msg_info "Triggering post-transaction background sync..."
-        runuser -u "$INVOKING_USER" -- python3 "$VAULT_SYNC_SCRIPT" >/dev/null 2>&1 &
-    fi
+    dispatch_plugin_hooks post-transaction-bg
 fi
 
 exit ${exit_code:-0}
