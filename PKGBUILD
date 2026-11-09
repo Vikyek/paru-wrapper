@@ -7,6 +7,9 @@ arch=('any')
 url="https://github.com/Vikyek/paru-wrapper"
 license=('GPL-3.0-only')
 depends=('paru' 'bash' 'sudo' 'python' 'jq' 'curl' 'git')
+optdepends=('snapper: Support for automatic snapshots'
+            'rebuild-check: Check for packages needing a rebuild'
+            'anneal: Queue package rebuilds')
 install=paru-wrapper.install
 source=(
     "paru-wrapper"
