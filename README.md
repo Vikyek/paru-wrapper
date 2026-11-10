@@ -264,11 +264,17 @@ paru -R package-name
 
 ## Support & Sponsorship
 
-`paru-wrapper` is maintained and authored by **[Vikyek](https://github.com/Vikyek)** as an independent open-source project. If `paru-wrapper` speeds up your Arch Linux workflow, secures your system with Btrfs snapshots, or automates your custom repository maintenance, please consider sponsoring ongoing development:
+`paru-wrapper` is authored and maintained by **[Vikyek](https://github.com/Vikyek)** as an independent open-source project. Everything is 100% open-source, telemetry-free, and public.
+
+> ### 🎯 Active Sponsorship Goal: Monthly Living Essentials
+> **Target:** **2,710 PLN / ~$675 USD per month** (Rent & Utilities)  
+> Covering basic living essentials directly unlocks dedicated, sustainable full-time independent open-source engineering across `paru-wrapper` and related Arch Linux tooling.
+
+If `paru-wrapper` accelerates your workflow, secures your system with automatic snapshots, or simplifies local package builds, consider supporting my work:
 
 - **GitHub Sponsors**: [github.com/sponsors/Vikyek](https://github.com/sponsors/Vikyek)
 
-Your sponsorship directly funds ongoing maintenance, new feature development, and upstream Arch Linux ecosystem tooling!
+Every contribution—monthly or one-time—directly supports active maintenance, hardware testbeds, and new feature development!
 
 ---
 
