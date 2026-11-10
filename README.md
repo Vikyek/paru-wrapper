@@ -151,6 +151,14 @@ paru -R package-name
 
 ---
 
+## Support & Sponsorship
+
+If you find `paru-wrapper` helpful, consider supporting ongoing development:
+
+- **GitHub Sponsors**: [Vikyek](https://github.com/sponsors/Vikyek)
+
+---
+
 ## Testing & Maintenance
 
 Before committing changes or bumping release versions, run the unit test suite
