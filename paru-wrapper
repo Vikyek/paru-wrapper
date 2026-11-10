@@ -21,12 +21,14 @@ Usage:
     paru-wrapper --init-repo <repo_name> <repo_dir> <projects_dir>
     paru-wrapper --connect-repo <repo_name> <repo_dir> <projects_dir>
     paru-wrapper --wrapper-help
+    paru-wrapper --wrapper-version
 
 Wrapper Options:
     --gittinator        Scan installed AUR packages and migrate to -git variants
     --init-repo         Initialize an empty custom local pacman repository
     --connect-repo      Connect to an existing custom local pacman repository
     --wrapper-help      Display this paru-wrapper extended help message
+    --wrapper-version   Display paru-wrapper version string
 
 Modular Plugins:
     Hook directories:
@@ -53,6 +55,12 @@ Environment Variables:
 All other arguments and flags are passed directly to upstream paru.
 See 'man paru-wrapper' or 'paru --help' for upstream pacman/paru options.
 EOF
+    exit 0
+fi
+
+# Intercept wrapper-specific version query
+if [[ "${1:-}" == "--wrapper-version" ]]; then
+    echo "paru-wrapper 1.2.0"
     exit 0
 fi
 

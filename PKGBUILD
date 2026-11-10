@@ -3,7 +3,7 @@
 pkgname=paru-wrapper
 pkgver=1.2.0
 pkgrel=1
-pkgdesc="Custom paru wrapper providing automatic local AUR repo management and --gittinator VCS migrations"
+pkgdesc="Enhanced paru wrapper with modular plugin hooks, local AUR repo management, and VCS migrations"
 arch=('any')
 url="https://github.com/Vikyek/paru-wrapper"
 license=('GPL-3.0-only')
