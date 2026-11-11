@@ -267,6 +267,17 @@ paru -R package-name
 
 `paru-wrapper` is authored and maintained by **[Vikyek](https://github.com/Vikyek)** as an independent open-source project. Everything is 100% open-source, telemetry-free, and public.
 
+<div align="center">
+
+<!-- Official GitHub Sponsors Button & Card (Rendered in web/HTML environments; GitHub markdown sanitizer strips iframes, falling back to native badges) -->
+<iframe src="https://github.com/sponsors/Vikyek/button" title="Sponsor Vikyek" height="32" width="114" style="border: 0; border-radius: 6px;"></iframe>
+<iframe src="https://github.com/sponsors/Vikyek/card" title="Sponsor Vikyek" height="225" width="600" style="border: 0;"></iframe>
+
+[![Sponsor Vikyek](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github&style=for-the-badge)](https://github.com/sponsors/Vikyek)
+[![Donate on Liberapay](https://img.shields.io/badge/Donate-Liberapay-f6c915?logo=liberapay&logoColor=black)](https://liberapay.com/Vikyek)
+
+</div>
+
 > ### 🎯 Active Sponsorship Goal: Monthly Living Essentials
 > **Target:** **2,710 PLN / ~$675 USD per month** (Rent & Utilities)  
 > Covering basic living essentials directly unlocks dedicated, sustainable full-time independent open-source engineering across `paru-wrapper` and related Arch Linux tooling.
