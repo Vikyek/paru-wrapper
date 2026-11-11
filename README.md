@@ -7,6 +7,7 @@
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL_3.0-blue.svg)](LICENSE)
 [![Sponsor Vikyek](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=github-sponsors&logoColor=white)](https://github.com/sponsors/Vikyek)
 [![Donate on Liberapay](https://img.shields.io/badge/Donate-Liberapay-f6c915?logo=liberapay&logoColor=black)](https://liberapay.com/Vikyek)
+[![Sponsor on Polar](https://img.shields.io/badge/Sponsor-Polar-0062FF?logo=polar&logoColor=white)](https://polar.sh/vikyek)
 
 A high-performance, power-user wrapper for `paru` and `pacman` on Arch Linux. Engineered with an event-driven modular plugin hook architecture, automated local custom repository synchronization (`myrepo`), dependency-aware orphan pruning, and seamless system-wide migration to development (`-git`) packages.
 
@@ -275,6 +276,7 @@ paru -R package-name
 
 [![Sponsor Vikyek](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github&style=for-the-badge)](https://github.com/sponsors/Vikyek)
 [![Donate on Liberapay](https://img.shields.io/badge/Donate-Liberapay-f6c915?logo=liberapay&logoColor=black)](https://liberapay.com/Vikyek)
+[![Sponsor on Polar](https://img.shields.io/badge/Sponsor-Polar-0062FF?logo=polar&logoColor=white)](https://polar.sh/vikyek)
 
 </div>
 
@@ -286,6 +288,7 @@ If `paru-wrapper` accelerates your workflow, secures your system with automatic 
 
 - **GitHub Sponsors**: [github.com/sponsors/Vikyek](https://github.com/sponsors/Vikyek)
 - **Liberapay (Recurrent Open-Source Patronage)**: [liberapay.com/Vikyek](https://liberapay.com/Vikyek)
+- **Polar**: [polar.sh/vikyek](https://polar.sh/vikyek)
 
 Every contribution—monthly or one-time—directly supports active maintenance, hardware testbeds, and new feature development!
 
