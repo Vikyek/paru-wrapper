@@ -7,7 +7,6 @@
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL_3.0-blue.svg)](LICENSE)
 [![Sponsor Vikyek](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=github-sponsors&logoColor=white)](https://github.com/sponsors/Vikyek)
 [![Donate on Liberapay](https://img.shields.io/badge/Donate-Liberapay-f6c915?logo=liberapay&logoColor=black)](https://liberapay.com/Vikyek)
-[![Sponsor on Polar](https://img.shields.io/badge/Sponsor-Polar-0062FF?logo=polar&logoColor=white)](https://polar.sh/vikyek)
 
 A high-performance, power-user wrapper for `paru` and `pacman` on Arch Linux. Engineered with an event-driven modular plugin hook architecture, automated local custom repository synchronization (`myrepo`), dependency-aware orphan pruning, and seamless system-wide migration to development (`-git`) packages.
 
@@ -273,7 +272,6 @@ paru -R package-name
 
 [![Sponsor Vikyek](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github&style=for-the-badge)](https://github.com/sponsors/Vikyek)
 [![Donate on Liberapay](https://img.shields.io/badge/Donate-Liberapay-f6c915?style=for-the-badge&logo=liberapay&logoColor=black)](https://liberapay.com/Vikyek)
-[![Sponsor on Polar](https://img.shields.io/badge/Sponsor-Polar-0062FF?style=for-the-badge&logo=polar&logoColor=white)](https://polar.sh/vikyek)
 [![Donate with Stripe](https://img.shields.io/badge/Donate-Stripe-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://profile.stripe.com/@vikyek)
 
 </div>
@@ -286,7 +284,6 @@ If `paru-wrapper` accelerates your workflow, secures your system with automatic 
 
 - **GitHub Sponsors**: [github.com/sponsors/Vikyek](https://github.com/sponsors/Vikyek) *(Monthly tiers and one-time tips)*
 - **Liberapay**: [liberapay.com/Vikyek](https://liberapay.com/Vikyek) *(0% platform fee recurrent patronage in EUR/USD/PLN)*
-- **Polar**: [polar.sh/vikyek](https://polar.sh/vikyek) *(Developer subscriptions & commercial passes)*
 - **Direct Stripe Profile**: [profile.stripe.com/@vikyek](https://profile.stripe.com/@vikyek) *(Direct one-time tips & sponsorship)*
 
 Every contribution—monthly or one-time—directly supports active maintenance, hardware testbeds, and new feature development!
