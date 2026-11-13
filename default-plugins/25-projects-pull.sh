@@ -1,7 +1,7 @@
 #!/bin/bash
 # Plugin: Projects-Pull integration for paru-wrapper
 # Automatically pulls fast-forward updates for git repositories in Projects directory
-# during pre-transaction phase before local package evaluations or builds.
+# during pre-transaction phase and rebuilds/installs updated installed packages.
 
 plugin_name="projects-pull"
 

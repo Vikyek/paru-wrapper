@@ -67,7 +67,7 @@ Hooks are executed in order of precedence. Higher-priority tiers shadow lower-pr
 
 | Event | Execution Point | Primary Use Case |
 | :--- | :--- | :--- |
-| `pre-transaction` | Before package downloads or compilations begin | Creating Btrfs pre-snapshots (`10-snapper.sh`), fetching git updates for source projects (`25-projects-pull.sh`) |
+| `pre-transaction` | Before package downloads or compilations begin | Creating Btrfs pre-snapshots (`10-snapper.sh`), pulling git updates and rebuilding updated installed projects (`25-projects-pull.sh`) |
 | `package-rebuilt` | Immediately after an individual package re-indexes | Unmarking completed jobs in package rebuild queues (`20-anneal.sh`) |
 | `post-transaction` | Right after package manager transaction finishes | Creating matched Btrfs post-snapshots (`10-snapper.sh`) |
 | `deferred-hooks` | Executed after pacman transaction completes | Scanning binaries for broken shared libraries (`30-rebuild-check.sh`) |
@@ -77,7 +77,7 @@ Hooks are executed in order of precedence. Higher-priority tiers shadow lower-pr
 
 - **`10-snapper.sh`**: Creates synchronized Btrfs pre/post snapshots via `snapper`.
 - **`20-anneal.sh`**: Automatically marks recompiled packages as resolved in the `anneal` rebuild queue.
-- **`25-projects-pull.sh`**: Pulls upstream git fast-forwards for local package repos residing in `$PARU_WRAPPER_PROJECTS_DIR` before builds start.
+- **`25-projects-pull.sh`**: Pulls upstream git fast-forwards for clean local package repos in `$PARU_WRAPPER_PROJECTS_DIR` and automatically rebuilds/installs updated packages that are already installed (when `PARU_WRAPPER_AUTO_UPDATE_INSTALLED` is enabled).
 - **`30-rebuild-check.sh`**: Scans installed packages for broken `.so` shared-library references (`rebuild-check-hook`).
 - **`40-paru-completion.sh`**: Rebuilds cached command completions for Bash, Zsh, and Fish (`paru-completion-hook`).
 - **`50-vault-sync.sh`**: Performs background synchronization for private configuration repositories.
@@ -168,7 +168,7 @@ paru-wrapper/
 | `PARU_WRAPPER_REPO` | `""` | Name of the custom local pacman repository database. |
 | `PARU_WRAPPER_REPO_DIR` | `""` | Directory containing the custom repository `.db` file. |
 | `PARU_WRAPPER_PROJECTS_DIR` | `~/Projects` | Root path to local development project source checkouts. |
-| `PARU_WRAPPER_AUTO_UPDATE_INSTALLED` | `1` | Automatically upgrades local custom repository packages when a newer AUR version is found. Set to `0` to log warnings only. |
+| `PARU_WRAPPER_AUTO_UPDATE_INSTALLED` | `1` | Automatically upgrades local custom repository packages when a newer AUR version is found and rebuilds/installs updated installed projects in `$PARU_WRAPPER_PROJECTS_DIR`. Set to `0`/`false` to disable. |
 | `PARU_WRAPPER_DRY_RUN` | `false` | Simulates actions without making changes to filesystem or databases. |
 | `FORCE_REBUILD` | `0` | When set to `1`, forces recompilation of target packages from source. |
 

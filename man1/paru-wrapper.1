@@ -57,7 +57,7 @@ Pre/post transaction Btrfs snapshots (requires \fBsnapper\fR).
 Automatically unmarks packages from the rebuild queue upon recompilation (requires \fBanneal\fR).
 .TP
 .B 25-projects-pull.sh
-Fetches fast-forward updates for git repositories residing in \fIPARU_WRAPPER_PROJECTS_DIR\fR before running local builds.
+Fetches fast-forward updates for clean git repositories residing in \fIPARU_WRAPPER_PROJECTS_DIR\fR and rebuilds/installs updated packages that are already installed.
 .TP
 .B 30-rebuild-check.sh
 Analyzes installed packages for broken shared library bindings after system updates (requires \fBrebuild-check-hook\fR).
@@ -70,7 +70,7 @@ Background configuration vault synchronization.
 .SH ENVIRONMENT VARIABLES
 .TP
 .B PARU_WRAPPER_AUTO_UPDATE_INSTALLED
-When set to 1 (default), automatically upgrades local custom repository packages when a newer version is discovered in the AUR.
+When enabled (default), automatically upgrades local custom repository packages when a newer version is discovered in the AUR, and rebuilds/installs updated installed projects in \fIPARU_WRAPPER_PROJECTS_DIR\fR.
 .TP
 .B PARU_WRAPPER_REPO
 Custom local repository name.
