@@ -403,7 +403,24 @@ for arg in "$@"; do
     fi
 done
 
-if [ "$is_transaction" = true ]; then
+is_search_install=false
+if [ "$is_transaction" = false ] && [ $# -gt 0 ]; then
+    has_op_flag=false
+    for arg in "$@"; do
+        if [[ "$arg" =~ ^-[SQRDFFTUGPBCVh] ]] || \
+           [[ "$arg" =~ ^-[a-zA-Z]*[SQRDFFTUGPBCVh] ]] || \
+           [[ "$arg" =~ ^-(c|h|V)$ ]] || \
+           [[ "$arg" =~ ^--(sync|query|remove|database|files|deptest|upgrade|getpkgbuild|show|build|clean|help|version)$ ]]; then
+            has_op_flag=true
+            break
+        fi
+    done
+    if [ "$has_op_flag" = false ]; then
+        is_search_install=true
+    fi
+fi
+
+if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
     # Detect if we are running in an anneal rebuild session
     is_anneal=false
     curr_pid=$$
@@ -511,7 +528,8 @@ if [ "$is_transaction" = true ]; then
         fi
     fi
 
-    # Extract target packages and other arguments
+    if [ "$is_transaction" = true ]; then
+        # Extract target packages and other arguments
     # Flags that consume the next argument as a value (not a package name)
     _value_flags='--overwrite|--ignore|--ignoregroup|--cachedir|--config|--dbpath|--gpgdir|--hookdir|--logfile|--arch|--color|--assume-installed'
     targets=()
@@ -714,6 +732,7 @@ if [ "$is_transaction" = true ]; then
             fi
         fi
     fi
+    fi
 fi
 
 # 6. Execute the real paru command
@@ -736,6 +755,14 @@ if [ "$is_transaction" = true ]; then
             exit_code=$?
         fi
     fi
+elif [ "$is_search_install" = true ]; then
+    if [ "$DRY_RUN" = true ]; then
+        msg_info "DRY RUN: would run: /usr/bin/paru --pacman /usr/bin/pacman-wrapper $*"
+        exit_code=0
+    else
+        run_paru_with_clone_repair --pacman /usr/bin/pacman-wrapper "$@"
+        exit_code=$?
+    fi
 else
     if [ "$DRY_RUN" = true ]; then
         msg_info "DRY RUN: would run: /usr/bin/paru $*"
@@ -746,7 +773,7 @@ else
     fi
 fi
 
-if [ "$is_transaction" = true ]; then
+if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
     # Restore pacman hooks and update database
     if [ "$hooks_disabled" = true ]; then
         msg_info "Restoring pacman hooks and updating database..."
@@ -770,7 +797,7 @@ if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ] && [ "${hooks_dis
 fi
 
 # Optional post-transaction background plugin hooks (e.g. vault sync)
-if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ]; then
+if [ "${exit_code:-0}" -eq 0 ] && { [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; }; then
     dispatch_plugin_hooks post-transaction-bg
 fi
 
