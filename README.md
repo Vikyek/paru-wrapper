@@ -272,9 +272,9 @@ paru -R package-name
 
 <div align="center">
 
-
 [![Sponsor Vikyek](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github&style=for-the-badge)](https://github.com/sponsors/Vikyek)
 [![Donate on Liberapay](https://img.shields.io/badge/Donate-Liberapay-f6c915?style=for-the-badge&logo=liberapay&logoColor=black)](https://liberapay.com/Vikyek)
+[![Sponsor on Polar](https://img.shields.io/badge/Sponsor-Polar-0062FF?style=for-the-badge&logo=polar&logoColor=white)](https://polar.sh/vikyek)
 [![Donate with Stripe](https://img.shields.io/badge/Donate-Stripe-635BFF?style=for-the-badge&logo=stripe&logoColor=white)](https://profile.stripe.com/@vikyek)
 
 </div>
@@ -287,9 +287,25 @@ If `paru-wrapper` accelerates your workflow, secures your system with automatic 
 
 - **GitHub Sponsors**: [github.com/sponsors/Vikyek](https://github.com/sponsors/Vikyek) *(Monthly tiers and one-time tips)*
 - **Liberapay**: [liberapay.com/Vikyek](https://liberapay.com/Vikyek) *(0% platform fee recurrent patronage in EUR/USD/PLN)*
+- **Polar**: [polar.sh/vikyek](https://polar.sh/vikyek) *(Developer subscriptions & commercial passes)*
 - **Direct Stripe Profile**: [profile.stripe.com/@vikyek](https://profile.stripe.com/@vikyek) *(Direct one-time tips & sponsorship)*
 
 Every contribution—monthly or one-time—directly supports active maintenance, hardware testbeds, and new feature development!
+
+---
+
+## 🌐 Ecosystem
+
+Part of the **[Vikyek](https://github.com/Vikyek)** developer tooling and AI agent middleware ecosystem:
+
+| Project | Description |
+|---|---|
+| **[toon-mcp](https://github.com/Vikyek/toon-mcp)** | FastMCP server & CLI for token-efficient TOON format serialization |
+| **[vorchestrator](https://github.com/Vikyek/vorchestrator)** | Multi-agent orchestration, dynamic tiering & dual-provider quota optimizer |
+| **[agy-input-wrap](https://github.com/Vikyek/agy-input-wrap)** | Clean PTY terminal input interceptor & prompt optimizer for AI CLIs |
+| **[destructive-action-guard](https://github.com/Vikyek/destructive-action-guard)** | Blast-radius guard & safety interception engine for autonomous agents |
+| **[paru-wrapper](https://github.com/Vikyek/paru-wrapper)** | Enhanced Arch Linux pacman/paru wrapper with plugins & hook lifecycle |
+| **[vlfstatus](https://github.com/Vikyek/vlfstatus)** | Ultra-lightweight, modular status bar generator for Linux desktops |
 
 ---
 
