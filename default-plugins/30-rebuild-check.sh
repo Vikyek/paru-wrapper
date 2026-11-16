@@ -20,9 +20,9 @@ plugin_hook() {
                 else
                     msg_info "[rebuild-check] Checking for packages requiring rebuild..."
                     if [ "$#" -gt 0 ]; then
-                        printf '%s\n' "$@" | sudo /usr/bin/rebuild-check 2>/dev/null || true
+                        printf '%s\n' "$@" | sudo /usr/bin/rebuild-check || true
                     else
-                        sudo /usr/bin/rebuild-check 2>/dev/null || true
+                        sudo /usr/bin/rebuild-check || true
                     fi
                 fi
             fi
