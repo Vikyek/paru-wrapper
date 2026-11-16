@@ -1,0 +1,144 @@
+name: Auto-Tag Version
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '*.md'
+      - '**/*.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+jobs:
+  auto-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Detect version and create tag
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          VERSION=""
+
+          # 1. PKGBUILD (skipping VCS packages with -git suffix or pkgver() function unless static version is bumped)
+          if [ -f PKGBUILD ]; then
+            PKGNAME=$(grep -Po '^[[:space:]]*pkgname=\K[^\s#]+' PKGBUILD | head -n 1 | tr -d '\042\047()') || true
+            IS_VCS=false
+            if [[ "$PKGNAME" == *-git ]] || grep -qE '^[[:space:]]*pkgver\s*\(\)' PKGBUILD; then
+              IS_VCS=true
+            fi
+
+            if [ "$IS_VCS" = false ]; then
+              PKGVER=$(grep -Po '^[[:space:]]*pkgver=\K[^\s#]+' PKGBUILD | head -n 1 | tr -d '\042\047') || true
+              if [ -n "$PKGVER" ]; then
+                VERSION="$PKGVER"
+                echo "Found version $VERSION in PKGBUILD ($PKGNAME)"
+              fi
+            else
+              # Check if static pkgver was bumped in the commit(s) or workflow was manually dispatched
+              STATIC_BUMPED=false
+              if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+                STATIC_BUMPED=true
+              else
+                BEFORE="${{ github.event.before || '' }}"
+                if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git rev-parse --verify "$BEFORE" >/dev/null 2>&1; then
+                  if git diff "$BEFORE" HEAD -- PKGBUILD 2>/dev/null | grep -qE '^\+[[:space:]]*pkgver='; then
+                    STATIC_BUMPED=true
+                  fi
+                elif git rev-parse HEAD~1 >/dev/null 2>&1; then
+                  if git diff HEAD~1 HEAD -- PKGBUILD 2>/dev/null | grep -qE '^\+[[:space:]]*pkgver='; then
+                    STATIC_BUMPED=true
+                  fi
+                elif git show HEAD -- PKGBUILD 2>/dev/null | grep -qE '^\+[[:space:]]*pkgver='; then
+                  STATIC_BUMPED=true
+                fi
+              fi
+
+              if [ "$STATIC_BUMPED" = true ]; then
+                PKGVER=$(grep -Po '^[[:space:]]*pkgver=\K[^\s#]+' PKGBUILD | head -n 1 | tr -d '\042\047') || true
+                if [ -n "$PKGVER" ]; then
+                  VERSION="$PKGVER"
+                  echo "Found bumped static version $VERSION in VCS PKGBUILD ($PKGNAME)"
+                fi
+              else
+                echo "PKGBUILD is VCS package ($PKGNAME with pkgver() / -git) and static pkgver was not bumped; skipping PKGBUILD"
+              fi
+            fi
+          fi
+
+          # 2. pyproject.toml
+          if [ -z "$VERSION" ] && [ -f pyproject.toml ]; then
+            PY_VER=$(sed -n -E 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*["\047]([^"\047]+)["\047].*/\1/p' pyproject.toml | head -n 1) || true
+            if [ -n "$PY_VER" ]; then
+              VERSION="$PY_VER"
+              echo "Found version $VERSION in pyproject.toml"
+            fi
+          fi
+
+          # 3. package.json
+          if [ -z "$VERSION" ] && [ -f package.json ]; then
+            JSON_VER=$(sed -n -E 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' package.json | head -n 1) || true
+            if [ -n "$JSON_VER" ]; then
+              VERSION="$JSON_VER"
+              echo "Found version $VERSION in package.json"
+            fi
+          fi
+
+          # 4. VERSION file
+          if [ -z "$VERSION" ] && [ -f VERSION ]; then
+            FILE_VER=$(tr -d '[:space:]' < VERSION) || true
+            if [ -n "$FILE_VER" ]; then
+              VERSION="${FILE_VER#v}"
+              echo "Found version $VERSION in VERSION file"
+            fi
+          fi
+
+          # Strip leading 'v' if present
+          VERSION="${VERSION#v}"
+
+          if [ -z "$VERSION" ]; then
+            echo "No applicable version found in PKGBUILD, pyproject.toml, package.json, or VERSION."
+            echo "Nothing to tag."
+            exit 0
+          fi
+
+          TAG="v${VERSION}"
+          echo "Target tag: $TAG"
+
+          # Check if tag already exists on origin
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists on origin. Skipping."
+            exit 0
+          fi
+
+          echo "Tag ${TAG} does not exist on origin. Creating annotated tag..."
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag -d "${TAG}" 2>/dev/null || true
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "refs/tags/${TAG}"
+          echo "Successfully pushed tag ${TAG} to origin."
+
+          # Dispatch aur-release workflow if GH_PAT was not set and workflow exists
+          if [ -z "${GH_PAT:-}" ] && [ -f .github/workflows/aur-release.yml ]; then
+            echo "GH_PAT not provided; dispatching aur-release.yml explicitly via GitHub CLI..."
+            sleep 2
+            gh workflow run aur-release.yml --ref "${TAG}" || (sleep 3 && gh workflow run aur-release.yml --ref "${TAG}") || echo "Warning: Failed to dispatch aur-release.yml"
+          else
+            if [ -n "${GH_PAT:-}" ]; then
+              echo "Tag pushed with GH_PAT; tag push event will trigger aur-release.yml automatically."
+            fi
+          fi
