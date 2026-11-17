@@ -18,7 +18,7 @@ jobs:
           pacman -Syu --noconfirm git sudo namcap diffutils pacman-contrib
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup non-root builder
         run: |
@@ -48,19 +48,30 @@ jobs:
         run: |
           namcap PKGBUILD
 
-      - name: Install AUR dependencies (paru-bin)
+      - name: Resolve Dependencies and Build Package
         run: |
-          sudo -u builder bash -c '
-            cd /tmp
-            for i in 1 2 3 4 5; do git clone https://aur.archlinux.org/paru-bin.git && break || sleep 5; done
-            cd paru-bin
-            git checkout 92a55429afbec4fceeb2cef843245105307444d2
-            makepkg -si --noconfirm
-          '
+          # Install official makedepends
+          MAKEDEPS=$(sudo -u builder makepkg --printsrcinfo | awk '$1 == "makedepends" {print $3}' | tr '\n' ' ')
+          if [ -n "$MAKEDEPS" ]; then
+            pacman -S --noconfirm --needed $MAKEDEPS || true
+          fi
 
-      - name: Build Package
-        run: |
-          sudo -u builder makepkg -s --noconfirm
+          # Install official runtime depends that are available in official repos
+          ALL_DEPS=$(sudo -u builder makepkg --printsrcinfo | awk '$1 == "depends" {print $3}' | sed -E 's/[<>=].*//' | tr '\n' ' ')
+          if [ -n "$ALL_DEPS" ]; then
+            REPO_DEPS=""
+            for dep in $ALL_DEPS; do
+              if pacman -Si "$dep" >/dev/null 2>&1; then
+                REPO_DEPS="$REPO_DEPS $dep"
+              fi
+            done
+            if [ -n "$REPO_DEPS" ]; then
+              pacman -S --noconfirm --needed $REPO_DEPS || true
+            fi
+          fi
+
+          # Build package (fallback to -d if runtime deps are AUR-only)
+          sudo -u builder makepkg -s --noconfirm || sudo -u builder makepkg -d --noconfirm
 
       - name: Validate Built Package
         run: |
@@ -81,28 +92,37 @@ jobs:
       contents: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Download Build Artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v4
         with:
           name: built-package
           path: ./dist
 
+      - name: Extract Package Name
+        id: pkg
+        run: |
+          PKGNAME=$(grep -Po '^pkgname=\K.*' PKGBUILD | tr -d '"'\''')
+          echo "name=$PKGNAME" >> $GITHUB_OUTPUT
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           files: ./dist/*.pkg.tar.zst
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to AUR
+        if: env.AUR_KEY != ''
         uses: KSXGitHub/github-actions-deploy-aur@v3
         with:
-          pkgname: paru-wrapper
+          pkgname: ${{ steps.pkg.outputs.name }}
           pkgbuild: ./PKGBUILD
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        env:
+          AUR_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
