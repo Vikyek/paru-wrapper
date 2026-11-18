@@ -254,6 +254,114 @@ run_paru_with_clone_repair() {
     return $exit_code
 }
 
+# Check whether a PID belongs to an active repo-add/repo-remove process
+is_live_repo_tool_pid() {
+    local pid="$1"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    [[ "$pid" -gt 0 ]] || return 1
+    [[ -d "/proc/$pid" ]] || return 1
+
+    local stat_line stat_tail state
+    if read -r stat_line < "/proc/$pid/stat" 2>/dev/null; then
+        stat_tail="${stat_line##*)}"
+        if read -r state _ <<< "$stat_tail" && [[ "$state" == "Z" ]]; then
+            return 1
+        fi
+    fi
+
+    if [[ -r "/proc/$pid/cmdline" ]]; then
+        local cmd_args=() arg
+        mapfile -d '' -t cmd_args < "/proc/$pid/cmdline" 2>/dev/null || true
+        [[ ${#cmd_args[@]} -gt 0 ]] || return 1
+        for arg in "${cmd_args[@]}"; do
+            if [[ "${arg##*/}" =~ ^repo-(add|remove|elephant)$ ]]; then
+                return 0
+            fi
+        done
+        return 1
+    fi
+
+    return 0
+}
+
+# Remove stale repo DB lockfiles left behind by dead/crashed repo-add/repo-remove
+# processes and wait boundedly if an active process holds the lock.
+ensure_repo_lock_clear() {
+    local db_path="${1:-}"
+    local timeout="${2:-120}"
+    [[ -n "$db_path" ]] || return 0
+
+    local lockfile="${db_path}.lck"
+    if [[ ! -e "$lockfile" && ! -L "$lockfile" ]]; then
+        return 0
+    fi
+
+    local now deadline elapsed last_log=0
+    printf -v now '%(%s)T' -1
+    deadline=$((now + timeout))
+
+    while true; do
+        if [[ ! -e "$lockfile" && ! -L "$lockfile" ]]; then
+            return 0
+        fi
+
+        local raw_pid="" current_pid=""
+        raw_pid=$(cat "$lockfile" 2>/dev/null || true)
+        raw_pid="${raw_pid//[[:space:]]/}"
+
+        if [[ -z "$raw_pid" ]]; then
+            local mtime=0 age=5
+            printf -v now '%(%s)T' -1
+            mtime=$(stat -c %Y "$lockfile" 2>/dev/null || echo 0)
+            age=$((now - mtime))
+            if (( age < 5 && now < deadline )); then
+                sleep 1
+                continue
+            fi
+            current_pid=$(cat "$lockfile" 2>/dev/null || true)
+            current_pid="${current_pid//[[:space:]]/}"
+            if [[ -z "$current_pid" ]]; then
+                rm -f "$lockfile" 2>/dev/null || true
+                if [[ ! -e "$lockfile" && ! -L "$lockfile" ]]; then
+                    msg_warn "Removed stale empty repository lockfile: $lockfile"
+                    return 0
+                fi
+                msg_warn "Failed to remove stale repository lockfile: $lockfile"
+                return 1
+            fi
+            continue
+        fi
+
+        if ! is_live_repo_tool_pid "$raw_pid"; then
+            current_pid=$(cat "$lockfile" 2>/dev/null || true)
+            current_pid="${current_pid//[[:space:]]/}"
+            if [[ "$current_pid" == "$raw_pid" ]]; then
+                rm -f "$lockfile" 2>/dev/null || true
+                if [[ ! -e "$lockfile" && ! -L "$lockfile" ]]; then
+                    msg_warn "Removed stale repository lockfile '$lockfile' (PID $raw_pid is no longer active)."
+                    return 0
+                fi
+                msg_warn "Failed to remove stale repository lockfile: $lockfile"
+                return 1
+            fi
+            continue
+        fi
+
+        printf -v now '%(%s)T' -1
+        if (( now >= deadline )); then
+            msg_warn "Timed out waiting for repository lockfile '$lockfile' held by active PID $raw_pid."
+            return 1
+        fi
+
+        if (( last_log == 0 || now - last_log >= 15 )); then
+            msg_info "Waiting for active repository lockfile '$lockfile' (PID $raw_pid)..."
+            last_log=$now
+        fi
+
+        sleep 1
+    done
+}
+
 # Initialize variables to avoid unbound variable errors
 PARU_WRAPPER_REPO=""
 PARU_WRAPPER_REPO_DB=""
@@ -497,8 +605,12 @@ if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
                 if [ "$DRY_RUN" = true ]; then
                     msg_info "DRY RUN: would run: repo-add -R -w \"${PARU_WRAPPER_REPO_DB}\" \"${new_pkgs[*]}\""
                 else
-                    repo-add -R -w "$PARU_WRAPPER_REPO_DB" "${new_pkgs[@]}" || msg_warn "Failed to update repository database"
-                    msg_info "$PARU_WRAPPER_REPO repository database updated successfully."
+                    if ensure_repo_lock_clear "$PARU_WRAPPER_REPO_DB"; then
+                        repo-add -R -w "$PARU_WRAPPER_REPO_DB" "${new_pkgs[@]}" || msg_warn "Failed to update repository database"
+                        msg_info "$PARU_WRAPPER_REPO repository database updated successfully."
+                    else
+                        msg_warn "Skipping repository database update because lockfile could not be acquired."
+                    fi
                 fi
             fi
             rm -f "$start_marker"
@@ -561,7 +673,9 @@ if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
         for pkg in "${targets[@]}"; do
             echo "[paru-wrapper] Rebuild requested for '$pkg'. Purging stale binaries from $PARU_WRAPPER_REPO..." >&2
             rm -f "$REPO_DIR/$pkg-"*.pkg.tar.zst 2>/dev/null || true
-            repo-remove -w "$PARU_WRAPPER_REPO_DB" "$pkg" 2>/dev/null || true
+            if ensure_repo_lock_clear "$PARU_WRAPPER_REPO_DB"; then
+                repo-remove -w "$PARU_WRAPPER_REPO_DB" "$pkg" 2>/dev/null || true
+            fi
         done
         sudo pacman -Sy >/dev/null 2>&1 || true
     fi
@@ -737,6 +851,9 @@ fi
 
 # 6. Execute the real paru command
 purge_broken_clones
+if [ -n "${PARU_WRAPPER_REPO_DB:-}" ] && [ "$DRY_RUN" != true ]; then
+    ensure_repo_lock_clear "$PARU_WRAPPER_REPO_DB" || true
+fi
 if [ "$is_transaction" = true ]; then
     if [ "${FORCE_REBUILD:-0}" = "1" ] || [[ " $* " =~ " --rebuild " ]]; then
         if [ "$DRY_RUN" = true ]; then

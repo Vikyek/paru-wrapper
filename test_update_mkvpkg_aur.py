@@ -497,6 +497,95 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         for call in mock_run.call_args_list:
             self.assertNotEqual(call[0][0][0], "repo-remove")
 
+    @patch.object(update_mkvpkg_aur, 'db_path', '/fake/db.tar.gz')
+    @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
+    @patch('os.path.exists', return_value=True)
+    @patch('os.path.isdir', return_value=False)
+    @patch('update_mkvpkg_aur.ensure_repo_lock_clear', return_value=False)
+    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    @patch('update_mkvpkg_aur.query_aur')
+    @patch('update_mkvpkg_aur.is_installed')
+    @patch('update_mkvpkg_aur.subprocess.run')
+    @patch('update_mkvpkg_aur.alpm_vercmp')
+    def test_main_skips_repo_remove_when_lock_active(
+        self, mock_alpm_vercmp, mock_run, mock_is_installed, mock_query_aur,
+        mock_get_pkgs, mock_ensure_lock, mock_isdir, mock_exists
+    ):
+        mock_get_pkgs.return_value = {"pkg1": "1.0"}
+        mock_query_aur.return_value = {"pkg1": "2.0"}
+        mock_is_installed.return_value = False
+        mock_alpm_vercmp.return_value = 1
+
+        update_mkvpkg_aur.main()
+
+        mock_ensure_lock.assert_called_once_with("/fake/db.tar.gz")
+        mock_run.assert_not_called()
+
+
+class TestRepoLockfileHandling(unittest.TestCase):
+
+    def test_no_lockfile_returns_true(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/MKVPKG.db.tar.gz"
+            self.assertTrue(update_mkvpkg_aur.ensure_repo_lock_clear(db_path, timeout=1))
+
+    def test_removes_stale_dead_pid_lockfile(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/MKVPKG.db.tar.gz"
+            lockfile = f"{db_path}.lck"
+            with open(lockfile, "w", encoding="utf-8") as f:
+                f.write("99999999\n")
+            with patch('os.path.isdir', return_value=False):
+                self.assertTrue(update_mkvpkg_aur.ensure_repo_lock_clear(db_path, timeout=1))
+            self.assertFalse(os.path.exists(lockfile))
+
+    def test_removes_recycled_non_repo_pid_lockfile(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/MKVPKG.db.tar.gz"
+            lockfile = f"{db_path}.lck"
+            # Current python test runner PID is alive, but is not repo-add/repo-remove
+            with open(lockfile, "w", encoding="utf-8") as f:
+                f.write(f"{os.getpid()}\n")
+            self.assertTrue(update_mkvpkg_aur.ensure_repo_lock_clear(db_path, timeout=1))
+            self.assertFalse(os.path.exists(lockfile))
+
+    def test_removes_corrupt_and_old_empty_lockfiles(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/MKVPKG.db.tar.gz"
+            lockfile = f"{db_path}.lck"
+
+            with open(lockfile, "w", encoding="utf-8") as f:
+                f.write("not-a-pid\n")
+            self.assertTrue(update_mkvpkg_aur.ensure_repo_lock_clear(db_path, timeout=1))
+            self.assertFalse(os.path.exists(lockfile))
+
+            with open(lockfile, "w", encoding="utf-8") as f:
+                pass
+            old_ts = 1000000.0
+            os.utime(lockfile, (old_ts, old_ts))
+            self.assertTrue(update_mkvpkg_aur.ensure_repo_lock_clear(db_path, timeout=1))
+            self.assertFalse(os.path.exists(lockfile))
+
+    def test_preserves_live_repo_tool_lockfile_and_times_out(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f"{tmpdir}/MKVPKG.db.tar.gz"
+            lockfile = f"{db_path}.lck"
+            with open(lockfile, "w", encoding="utf-8") as f:
+                f.write("424242\n")
+            with patch('update_mkvpkg_aur.is_live_repo_tool_pid', return_value=True):
+                self.assertFalse(update_mkvpkg_aur.ensure_repo_lock_clear(db_path, timeout=0))
+            self.assertTrue(os.path.exists(lockfile))
+
 
 class TestVercmpPurePython(unittest.TestCase):
 

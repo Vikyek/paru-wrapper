@@ -10,6 +10,7 @@ import urllib.request
 import urllib.parse
 import json
 import sys
+import time
 
 db_path = os.environ.get("PARU_WRAPPER_REPO_DB", "")
 projects_dir = os.environ.get("PARU_WRAPPER_PROJECTS_DIR", "")
@@ -183,6 +184,125 @@ def query_aur(packages):
             raise RuntimeError(f"Error querying AUR for batch: {e}") from e
     return results
 
+def is_live_repo_tool_pid(pid_str: str) -> bool:
+    """Checks whether a lockfile PID corresponds to an active repo-add/repo-remove process."""
+    if not pid_str.isdigit():
+        return False
+    pid = int(pid_str)
+    if pid <= 0:
+        return False
+    proc_dir = f"/proc/{pid}"
+    if not os.path.isdir(proc_dir):
+        return False
+    try:
+        with open(os.path.join(proc_dir, "stat"), "r", encoding="utf-8", errors="replace") as f:
+            stat_line = f.read()
+        rparen = stat_line.rfind(")")
+        if rparen != -1:
+            after = stat_line[rparen + 1:].lstrip().split()
+            if after and after[0] == "Z":
+                return False
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(proc_dir, "cmdline"), "rb") as f:
+            raw_cmd = f.read()
+        if not raw_cmd:
+            return False
+        args = [arg.decode("utf-8", errors="replace") for arg in raw_cmd.split(b"\0") if arg]
+        return any(os.path.basename(arg) in ("repo-add", "repo-remove", "repo-elephant") for arg in args)
+    except OSError:
+        return os.path.isdir(proc_dir)
+
+
+def ensure_repo_lock_clear(db_path: str, timeout: int = 120) -> bool:
+    """
+    Removes stale repo DB lockfiles left behind by dead/crashed repo-add/repo-remove
+    processes and waits up to `timeout` seconds if an active process holds the lock.
+
+    @param db_path - Path to the repository database archive
+    @param timeout - Maximum seconds to wait for an active lock holder
+    @returns True if the lockfile is clear, False if still held after timeout or unremovable
+    """
+    lockfile = f"{db_path}.lck"
+    if not os.path.lexists(lockfile):
+        return True
+
+    deadline = time.monotonic() + max(0, timeout)
+    last_log = 0.0
+
+    while True:
+        if not os.path.lexists(lockfile):
+            return True
+
+        try:
+            with open(lockfile, "r", encoding="utf-8", errors="replace") as f:
+                raw_content = f.read()
+            pid_str = raw_content.strip()
+        except FileNotFoundError:
+            return True
+        except OSError as e:
+            sys.stderr.write(f"⚠ [update_mkvpkg_aur] Warning: Could not read lockfile '{lockfile}': {e}\n")
+            return False
+
+        if not pid_str:
+            # Give a newly created empty lockfile a brief grace window to flush its PID
+            try:
+                age = time.time() - os.lstat(lockfile).st_mtime
+            except FileNotFoundError:
+                return True
+            except OSError:
+                age = 5.0
+            if age < 5.0 and time.monotonic() < deadline:
+                time.sleep(min(1.0, max(0.05, deadline - time.monotonic())))
+                continue
+            try:
+                with open(lockfile, "r", encoding="utf-8", errors="replace") as f:
+                    if f.read().strip() == "":
+                        os.unlink(lockfile)
+                        sys.stderr.write(f"⚠ [update_mkvpkg_aur] Removed stale empty repository lockfile: {lockfile}\n")
+                        return True
+            except FileNotFoundError:
+                return True
+            except OSError as e:
+                sys.stderr.write(f"⚠ [update_mkvpkg_aur] Warning: Failed to remove stale lockfile '{lockfile}': {e}\n")
+                return False
+            continue
+
+        if not is_live_repo_tool_pid(pid_str):
+            try:
+                with open(lockfile, "r", encoding="utf-8", errors="replace") as f:
+                    if f.read().strip() == raw_content.strip():
+                        os.unlink(lockfile)
+                        sys.stderr.write(
+                            f"⚠ [update_mkvpkg_aur] Removed stale repository lockfile '{lockfile}' "
+                            f"(PID {pid_str} is no longer active).\n"
+                        )
+                        return True
+            except FileNotFoundError:
+                return True
+            except OSError as e:
+                sys.stderr.write(f"⚠ [update_mkvpkg_aur] Warning: Failed to remove stale lockfile '{lockfile}': {e}\n")
+                return False
+            continue
+
+        now = time.monotonic()
+        if now >= deadline:
+            sys.stderr.write(
+                f"⚠ [update_mkvpkg_aur] Warning: Timed out waiting for repository lockfile '{lockfile}' "
+                f"held by active PID {pid_str}.\n"
+            )
+            return False
+
+        if last_log == 0.0 or (now - last_log) >= 15.0:
+            sys.stderr.write(
+                f"[update_mkvpkg_aur] Waiting for active repository lockfile '{lockfile}' (PID {pid_str})...\n"
+            )
+            last_log = now
+
+        time.sleep(min(1.0, max(0.05, deadline - now)))
+
+
 def main():
     """
     Main execution entry point. Scans local repo, queries AUR, and unregisters
@@ -301,6 +421,12 @@ def main():
     if pkgs_to_remove:
         try:
             for i in range(0, len(pkgs_to_remove), 100):
+                if not ensure_repo_lock_clear(db_path):
+                    sys.stderr.write(
+                        f"{c_warn}⚠ [update_mkvpkg_aur] Warning:{c_reset} Skipping repo-remove because '{db_path}.lck' "
+                        f"could not be acquired.\n"
+                    )
+                    break
                 batch = pkgs_to_remove[i:i + 100]
                 subprocess.run(["repo-remove", "-w", "--", db_path] + batch, check=True) # nosec
                 db_changed = True
