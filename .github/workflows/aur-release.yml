@@ -109,7 +109,7 @@ jobs:
           echo "name=$PKGNAME" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ./dist/*.pkg.tar.zst
         env:
