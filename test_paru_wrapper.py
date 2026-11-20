@@ -292,5 +292,218 @@ exit 0
             self.assertEqual(f.read().strip(), "2")
 
 
+class TestParuWrapperSearchInstallDeferral(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.home_dir = os.path.join(self.tmpdir.name, "home")
+        self.config_dir = os.path.join(self.tmpdir.name, "xdg_config")
+        self.plugins_dir = os.path.join(self.config_dir, "paru-wrapper", "plugins.d")
+        self.cache_dir = os.path.join(self.tmpdir.name, "cache")
+        self.clone_dir = os.path.join(self.tmpdir.name, "paru-clone")
+        self.bin_dir = os.path.join(self.tmpdir.name, "bin")
+        for d in (
+            self.home_dir,
+            self.plugins_dir,
+            self.cache_dir,
+            self.clone_dir,
+            self.bin_dir,
+        ):
+            os.makedirs(d)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _write_exec(self, name, body):
+        path = os.path.join(self.bin_dir, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+        return path
+
+    def _setup_test_plugins(self, trace_file):
+        # Override all default plugins in XDG_CONFIG_HOME so tests stay isolated
+        plugin_body = f"""#!/bin/bash
+plugin_hook() {{
+    echo "hook:$1" >> "{trace_file}"
+}}
+"""
+        for pname in (
+            "10-snapper.sh",
+            "20-anneal.sh",
+            "30-rebuild-check.sh",
+            "40-paru-completion.sh",
+            "50-vault-sync.sh",
+        ):
+            with open(os.path.join(self.plugins_dir, pname), "w", encoding="utf-8") as f:
+                f.write("#!/bin/bash\nplugin_hook() { :; }\n")
+
+        with open(
+            os.path.join(self.plugins_dir, "25-projects-pull.sh"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            f.write(plugin_body)
+
+    def _setup_mock_system_bins(self):
+        self._write_exec(
+            "pacman",
+            """#!/usr/bin/env bash
+if [[ "${1:-}" == "-Si" ]]; then
+    for t in "${@:2}"; do
+        if [[ "$t" == extra/* ]]; then
+            echo "Repository      : extra"
+            echo "Name            : ${t#*/}"
+        fi
+    done
+    exit 0
+fi
+exit 0
+""",
+        )
+        self._write_exec("sudo", "#!/usr/bin/env bash\nexit 0\n")
+
+    def _base_env(self):
+        env = os.environ.copy()
+        env["HOME"] = self.home_dir
+        env["XDG_CONFIG_HOME"] = self.config_dir
+        env["XDG_CACHE_HOME"] = self.cache_dir
+        env["NO_COLOR"] = "1"
+        env["PARU_CLONE_DIR"] = self.clone_dir
+        env["PATH"] = f"{self.bin_dir}:{env.get('PATH', '')}"
+        return env
+
+    def test_search_install_no_selection_skips_project_updates(self):
+        """Running 'paru <name>' with no selection must never trigger projects-pull or post hooks."""
+        trace_file = os.path.join(self.tmpdir.name, "trace.log")
+        self._setup_test_plugins(trace_file)
+        self._setup_mock_system_bins()
+
+        mock_paru = self._write_exec(
+            "mock-paru",
+            f"""#!/usr/bin/env bash
+echo "paru:select=${{PARU_SEARCH_SELECT_FILE:-}}:args=$*" >> "{trace_file}"
+exit 0
+""",
+        )
+
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "ripgrep"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+        self.assertEqual(len(lines), 1, msg=lines)
+        self.assertTrue(lines[0].startswith("paru:select="), msg=lines)
+        self.assertTrue(lines[0].endswith(":args=ripgrep"), msg=lines)
+        self.assertFalse(any(line.startswith("hook:") for line in lines), msg=lines)
+
+    def test_search_install_runs_project_updates_only_after_selection(self):
+        """Project updates run only after user selects packages, then installs selected targets."""
+        trace_file = os.path.join(self.tmpdir.name, "trace.log")
+        self._setup_test_plugins(trace_file)
+        self._setup_mock_system_bins()
+
+        mock_paru = self._write_exec(
+            "mock-paru",
+            f"""#!/usr/bin/env bash
+if [[ -n "${{PARU_SEARCH_SELECT_FILE:-}}" ]]; then
+    echo "paru-select:$*" >> "{trace_file}"
+    printf 'extra/ripgrep\\n' > "$PARU_SEARCH_SELECT_FILE"
+    exit 0
+fi
+echo "paru-install:$*" >> "{trace_file}"
+exit 0
+""",
+        )
+
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "--searchby", "name", "--aur", "ripgrep"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+
+        self.assertEqual(
+            lines,
+            [
+                "paru-select:--searchby name --aur ripgrep",
+                "hook:pre-transaction",
+                "paru-install:-Quq",
+                "paru-install:--pacman /usr/bin/pacman-wrapper -S --searchby name --aur extra/ripgrep",
+                "hook:post-transaction",
+                "hook:post-transaction-bg",
+            ],
+        )
+
+    def test_search_install_preserves_aur_target_and_aborts_on_nonzero_select(self):
+        """Non-zero exit from selection skips pre-transaction; AUR target selection passes through."""
+        trace_file = os.path.join(self.tmpdir.name, "trace.log")
+        self._setup_test_plugins(trace_file)
+        self._setup_mock_system_bins()
+
+        mock_paru = self._write_exec(
+            "mock-paru",
+            f"""#!/usr/bin/env bash
+if [[ -n "${{PARU_SEARCH_SELECT_FILE:-}}" ]]; then
+    printf 'aur/custom-aur-pkg\\n' > "$PARU_SEARCH_SELECT_FILE"
+    exit 130
+fi
+echo "paru-install:$*" >> "{trace_file}"
+exit 0
+""",
+        )
+
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "custom-aur-pkg"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 130, msg=res.stderr)
+        self.assertFalse(os.path.exists(trace_file))
+
+        # Now return 0 from selection with aur/custom-aur-pkg
+        mock_paru_ok = self._write_exec(
+            "mock-paru-ok",
+            f"""#!/usr/bin/env bash
+if [[ -n "${{PARU_SEARCH_SELECT_FILE:-}}" ]]; then
+    printf 'aur/custom-aur-pkg\\n' > "$PARU_SEARCH_SELECT_FILE"
+    exit 0
+fi
+echo "paru-install:$*" >> "{trace_file}"
+exit 0
+""",
+        )
+        env["PARU_BIN"] = mock_paru_ok
+        res2 = subprocess.run(
+            [PARU_WRAPPER_PATH, "custom-aur-pkg"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res2.returncode, 0, msg=res2.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+        self.assertIn(
+            "paru-install:--pacman /usr/bin/pacman-wrapper -S aur/custom-aur-pkg",
+            lines,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

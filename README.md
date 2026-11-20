@@ -261,7 +261,7 @@ paru -Syu
 # Install or build packages
 paru -S package-name
 
-# Interactive search-and-install with automatic MKVPKG synchronization & post-build indexing
+# Interactive search-and-install (defers project updates & MKVPKG sync until packages are selected)
 paru search-term
 
 # Remove packages with dependency-aware orphan pruning

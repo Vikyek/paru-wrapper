@@ -706,6 +706,37 @@ for hook in 05-snap-pac-pre.hook zz-snap-pac-post.hook paru-completion-update.ho
     fi
 done
 
+_PARU_VALUE_FLAGS='--aururl|--aurrpcurl|--editor|--makepkg|--pacman|--pacman-conf|--git|--gpg|--sudo|--pkgctl|--fm|--bat|--makepkgconf|--editorflags|--mflags|--gitflags|--gpgflags|--sudoflags|--batflags|--fmflags|--chrootflags|--chrootpkgs|--rootchrootpkgs|--completioninterval|--minimumreleaseage|--minimumreleaseageexclude|--sortby|--searchby|--limit|--develsuffixes|--builddir|--clonedir|--develfile|--dbpath|--root|--ask|--cachedir|--arch|--color|--config|--gpgdir|--hookdir|--logfile|--sysroot|--ignore|--ignoregroup|--ignoredevel|--assume-installed|--print-format|--overwrite|--mode'
+
+# Split CLI arguments into flag args (preserving attached values) and positional targets
+split_paru_args() {
+    local -n _out_flags="$1"
+    local -n _out_targets="$2"
+    shift 2
+    _out_flags=()
+    _out_targets=()
+    local expect_val=false end_of_ops=false arg
+    for arg in "$@"; do
+        if [ "$end_of_ops" = true ]; then
+            _out_targets+=("$arg")
+        elif [ "$expect_val" = true ]; then
+            _out_flags+=("$arg")
+            expect_val=false
+        elif [[ "$arg" == "--" ]]; then
+            end_of_ops=true
+        elif [[ "$arg" == --*=* ]]; then
+            _out_flags+=("$arg")
+        elif [[ "$arg" =~ ^($_PARU_VALUE_FLAGS)$ ]] || [[ "$arg" =~ ^-[a-zA-Z]*[br]$ ]]; then
+            _out_flags+=("$arg")
+            expect_val=true
+        elif [[ "$arg" == -* && "$arg" != "-" ]]; then
+            _out_flags+=("$arg")
+        else
+            _out_targets+=("$arg")
+        fi
+    done
+}
+
 # Only run orphan cleaning if we are doing a system upgrade or installing/upgrading packages.
 is_transaction=false
 if [ $# -eq 0 ]; then
@@ -742,7 +773,46 @@ if [ "$is_transaction" = false ] && [ $# -gt 0 ]; then
     fi
 fi
 
-if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
+if [ "$is_search_install" = true ]; then
+    if [ "$DRY_RUN" = true ]; then
+        msg_info "DRY RUN: would run interactive search selection and, if packages are selected, pre-transaction hooks and /usr/bin/paru --pacman /usr/bin/pacman-wrapper $*"
+        exit 0
+    fi
+
+    select_file=$(mktemp)
+    trap 'rm -f "${select_file:-}"' EXIT INT TERM
+    purge_broken_clones
+    exit_code=0
+    PARU_SEARCH_SELECT_FILE="$select_file" run_paru_with_clone_repair "$@" || exit_code=$?
+
+    if [ "$exit_code" -ne 0 ] || [ ! -s "$select_file" ]; then
+        rm -f "$select_file"
+        trap - EXIT INT TERM
+        exit "$exit_code"
+    fi
+
+    selected_targets=()
+    while IFS= read -r _sel_line; do
+        [[ -n "$_sel_line" ]] && selected_targets+=("$_sel_line")
+    done < "$select_file"
+    rm -f "$select_file"
+    trap - EXIT INT TERM
+
+    if [ ${#selected_targets[@]} -eq 0 ]; then
+        exit 1
+    fi
+
+    # Preserve search flags and their values while replacing query terms with selected packages
+    search_flags=()
+    _discard_queries=()
+    split_paru_args search_flags _discard_queries "$@"
+
+    set -- "-S" "${search_flags[@]}" "${selected_targets[@]}"
+    is_transaction=true
+    is_search_install=false
+fi
+
+if [ "$is_transaction" = true ]; then
     # Detect if we are running in an anneal rebuild session
     is_anneal=false
     curr_pid=$$
@@ -854,29 +924,15 @@ if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
         fi
     fi
 
-    if [ "$is_transaction" = true ]; then
-        # Extract target packages and other arguments
-    # Flags that consume the next argument as a value (not a package name)
-    _value_flags='--overwrite|--ignore|--ignoregroup|--cachedir|--config|--dbpath|--gpgdir|--hookdir|--logfile|--arch|--color|--assume-installed'
+    # Extract target packages and other arguments
     targets=()
     other_args=()
+    split_paru_args other_args targets "$@"
     is_rebuild_cmd=false
-    _expect_value=false
-    for arg in "$@"; do
-        if [[ "$_expect_value" == true ]]; then
-            other_args+=("$arg")
-            _expect_value=false
-        elif [[ "$arg" =~ ^- ]]; then
-            other_args+=("$arg")
-            if [[ "$arg" == "--rebuild" || "$arg" == "--redownload" ]]; then
-                is_rebuild_cmd=true
-            fi
-            # If flag takes a separate value arg, consume next arg too
-            if [[ "$arg" =~ ^($_value_flags)$ ]]; then
-                _expect_value=true
-            fi
-        else
-            targets+=("$arg")
+    for arg in "${other_args[@]}"; do
+        if [[ "$arg" == "--rebuild" || "$arg" == "--redownload" ]]; then
+            is_rebuild_cmd=true
+            break
         fi
     done
 
@@ -885,10 +941,11 @@ if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
         export FORCE_REBUILD=1
         REPO_DIR=$(dirname "$PARU_WRAPPER_REPO_DB")
         for pkg in "${targets[@]}"; do
+            pkg_name="${pkg#*/}"
             echo "[paru-wrapper] Rebuild requested for '$pkg'. Purging stale binaries from $PARU_WRAPPER_REPO..." >&2
-            rm -f "$REPO_DIR/$pkg-"*.pkg.tar.zst 2>/dev/null || true
+            rm -f "$REPO_DIR/$pkg_name-"*.pkg.tar.zst 2>/dev/null || true
             if ensure_repo_lock_clear "$PARU_WRAPPER_REPO_DB"; then
-                repo-remove -w "$PARU_WRAPPER_REPO_DB" "$pkg" 2>/dev/null || true
+                repo-remove -w "$PARU_WRAPPER_REPO_DB" "$pkg_name" 2>/dev/null || true
             fi
         done
         sudo pacman -Sy >/dev/null 2>&1 || true
@@ -901,24 +958,32 @@ if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
     if [ ${#targets[@]} -gt 0 ]; then
         eval "$(LC_ALL=C pacman -Si "${targets[@]}" 2>/dev/null | awk -F '[ \t]*:[ \t]*' -v repo="$PARU_WRAPPER_REPO" '
             /^Repository/ { r=$2 }
-            /^Name/ { if (r != "" && r != repo) printf "_official_pkgs_cache[\"%s\"]=1\n", $2 }
+            /^Name/ {
+                if (r != "" && r != repo) {
+                    printf "_official_pkgs_cache[\"%s\"]=1\n", $2
+                    printf "_official_pkgs_cache[\"%s/%s\"]=1\n", r, $2
+                }
+            }
         ')"
     fi
 
     # Helper to check if package is in official repos
     is_official_pkg() {
         local pkg="$1"
+        if [[ "$pkg" == aur/* ]]; then
+            return 1
+        fi
         if [[ "${_official_pkgs_cache["$pkg"]:-}" == 1 ]]; then
             return 0
         fi
         return 1
     }
 
-    # Pre-fetch AUR metadata in batches
+    # Pre-fetch AUR metadata in batches (strip any repo/ prefix for AUR RPC lookup)
     unofficial_targets=()
     for pkg in "${targets[@]}"; do
         if ! is_official_pkg "$pkg"; then
-            unofficial_targets+=("$pkg")
+            unofficial_targets+=("${pkg#*/}")
         fi
     done
     if [[ ${#unofficial_targets[@]} -gt 0 ]]; then
@@ -931,39 +996,50 @@ if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
         if is_official_pkg "$pkg"; then
             filtered_targets+=("$pkg")
         else
-            if [[ -n "${_aur_pkgs_cache["$pkg"]+x}" ]]; then
+            pkg_name="${pkg#*/}"
+            # If MKVPKG/<pkg> was pruned by update_mkvpkg_aur.py, unqualify it so AUR install succeeds
+            if [[ -n "$PARU_WRAPPER_REPO" && "$pkg" == "$PARU_WRAPPER_REPO/"* ]] && ! pacman -Si "$pkg" >/dev/null 2>&1; then
+                pkg="$pkg_name"
+            fi
+
+            if [[ -n "${_aur_pkgs_cache["$pkg_name"]+x}" ]]; then
                 in_aur=1
             else
                 in_aur=0
             fi
-            if [ "$in_aur" -eq 0 ]; then
+            if [[ "$pkg" == */* && "$pkg" != "$PARU_WRAPPER_REPO/"* && "$pkg" != aur/* ]]; then
+                # Explicit custom PKGBUILD/non-ALPM repo target (not MKVPKG or aur)
+                filtered_targets+=("$pkg")
+            elif [ "$in_aur" -eq 0 ]; then
                 # Local package not in AUR: rebuild from PROJECTS_DIR if available
-                if [ -d "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}" ] && [ -f "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}/PKGBUILD" ]; then
-                    msg_info "Rebuilding local package '$pkg' from source in ${PARU_WRAPPER_PROJECTS_DIR}..."
+                if [ -d "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}" ] && [ -f "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}/PKGBUILD" ]; then
+                    msg_info "Rebuilding local package '$pkg_name' from source in ${PARU_WRAPPER_PROJECTS_DIR}..."
                     if [ "$DRY_RUN" = true ]; then
-                        msg_info "DRY RUN: would run: (cd \"${PARU_WRAPPER_PROJECTS_DIR}/${pkg}\" && makepkg -sfi --noconfirm)"
+                        msg_info "DRY RUN: would run: (cd \"${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}\" && makepkg -sfi --noconfirm)"
                     else
-                        if (cd "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}" && run_with_network_resume makepkg -sfi --noconfirm); then
-                            dispatch_plugin_hooks package-rebuilt "$pkg"
+                        if (cd "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}" && run_with_network_resume makepkg -sfi --noconfirm); then
+                            dispatch_plugin_hooks package-rebuilt "$pkg_name"
                         fi
                     fi
+                elif [[ "$pkg" == aur/* ]]; then
+                    filtered_targets+=("$pkg")
                 else
                     msg_warn "Package '$pkg' is not in the AUR and no source found in ${PARU_WRAPPER_PROJECTS_DIR}. Skipping."
                 fi
             elif [ "${FORCE_REBUILD:-0}" = "1" ]; then
                 # Force rebuild standard AUR package from source to link against new libraries
-                msg_info "FORCE_REBUILD active. Rebuilding AUR package '$pkg' from source..."
+                msg_info "FORCE_REBUILD active. Rebuilding AUR package '$pkg_name' from source..."
                 if [ "$DRY_RUN" = true ]; then
-                    msg_info "DRY RUN: would clone and rebuild '$pkg' from AUR."
+                    msg_info "DRY RUN: would clone and rebuild '$pkg_name' from AUR."
                 else
                     build_dir=$(mktemp -d)
-                    if git clone --depth 1 "https://aur.archlinux.org/$pkg.git" "$build_dir" 2>/dev/null; then
+                    if git clone --depth 1 "https://aur.archlinux.org/$pkg_name.git" "$build_dir" 2>/dev/null; then
                         if (cd "$build_dir" && run_with_network_resume makepkg -sfi --noconfirm); then
-                            dispatch_plugin_hooks package-rebuilt "$pkg"
+                            dispatch_plugin_hooks package-rebuilt "$pkg_name"
                         fi
                         rm -rf "$build_dir"
                     else
-                        msg_warn "Failed to clone '$pkg' from AUR. Passing to paru."
+                        msg_warn "Failed to clone '$pkg_name' from AUR. Passing to paru."
                         rm -rf "$build_dir"
                         filtered_targets+=("$pkg")
                     fi
@@ -984,7 +1060,7 @@ if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
     fi
 
     # 1. Get the list of packages to be upgraded
-    upgrades=$(/usr/bin/paru -Quq 2>/dev/null || true)
+    upgrades=$("${PARU_BIN:-/usr/bin/paru}" -Quq 2>/dev/null || true)
 
     # Write total packages to paru_total_packages for progress counter
     if [[ -n "$upgrades" ]]; then
@@ -1060,7 +1136,6 @@ if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
             fi
         fi
     fi
-    fi
 fi
 
 # 6. Execute the real paru command
@@ -1086,14 +1161,6 @@ if [ "$is_transaction" = true ]; then
             exit_code=$?
         fi
     fi
-elif [ "$is_search_install" = true ]; then
-    if [ "$DRY_RUN" = true ]; then
-        msg_info "DRY RUN: would run: /usr/bin/paru --pacman /usr/bin/pacman-wrapper $*"
-        exit_code=0
-    else
-        run_paru_with_clone_repair --pacman /usr/bin/pacman-wrapper "$@"
-        exit_code=$?
-    fi
 else
     if [ "$DRY_RUN" = true ]; then
         msg_info "DRY RUN: would run: /usr/bin/paru $*"
@@ -1104,7 +1171,7 @@ else
     fi
 fi
 
-if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
+if [ "$is_transaction" = true ]; then
     # Restore pacman hooks and update database
     if [ "$hooks_disabled" = true ]; then
         msg_info "Restoring pacman hooks and updating database..."
@@ -1128,7 +1195,7 @@ if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ] && [ "${hooks_dis
 fi
 
 # Optional post-transaction background plugin hooks (e.g. vault sync)
-if [ "${exit_code:-0}" -eq 0 ] && { [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; }; then
+if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ]; then
     dispatch_plugin_hooks post-transaction-bg
 fi
 
