@@ -74,7 +74,45 @@ plugin_hook() {
                     esac
 
                     local pkgnames is_pkg_installed=false
-                    pkgnames=$(bash -c 'source "$1" >/dev/null 2>&1 && printf "%s\n" "${pkgname[@]}"' _ "$repo/PKGBUILD")
+                    pkgnames=$(python3 - "$repo/PKGBUILD" "$repo/.SRCINFO" << 'PYPKG' 2>/dev/null || true
+import os, re, shlex, sys
+pb, srcinfo = sys.argv[1], sys.argv[2]
+names = []
+if os.path.isfile(pb):
+    with open(pb, "r", errors="replace") as f:
+        text = f.read()
+    lines = [ln.split("#", 1)[0] if not ln.lstrip().startswith("#") else "" for ln in text.splitlines()]
+    clean = "\n".join(lines)
+    m_arr = re.search(r'(?m)^\s*pkgname\s*=\s*\((.*?)\)', clean, re.S)
+    if m_arr:
+        try:
+            names = shlex.split(m_arr.group(1))
+        except ValueError:
+            names = m_arr.group(1).split()
+    else:
+        m_str = re.search(r'(?m)^\s*pkgname\s*=\s*([^\n]+)', clean)
+        if m_str:
+            val = m_str.group(1).strip().strip("'\"")
+            if val and "$" not in val:
+                names = [val]
+if (not names or any("$" in n for n in names)) and os.path.isfile(srcinfo):
+    with open(srcinfo, "r", errors="replace") as f:
+        si_names = []
+        for ln in f:
+            m = re.match(r'^\s*pkgname\s*=\s*(\S+)', ln)
+            if m:
+                si_names.append(m.group(1))
+        if si_names:
+            names = si_names
+for n in names:
+    n = n.strip("'\"")
+    if n and "$" not in n:
+        print(n)
+PYPKG
+)
+                    if [ -z "$pkgnames" ]; then
+                        pkgnames="$repo_name"
+                    fi
                     for p in $pkgnames; do
                         if pacman -Qq "$p" >/dev/null 2>&1; then
                             is_pkg_installed=true
@@ -83,6 +121,20 @@ plugin_hook() {
                     done
 
                     if [ "$is_pkg_installed" = true ]; then
+                        if command -v verify_pkg >/dev/null 2>&1; then
+                            local verify_json verify_danger=0 verify_verdict="" verify_rc=0
+                            verify_json=$(verify_pkg --json "$repo" 2>/dev/null) || verify_rc=$?
+                            if [ -n "$verify_json" ]; then
+                                verify_danger=$(printf '%s' "$verify_json" | jq -r '.danger_score // 0' 2>/dev/null || echo 0)
+                                verify_verdict=$(printf '%s' "$verify_json" | jq -r '.verdict // ""' 2>/dev/null || echo "")
+                            fi
+                            if [ "$verify_rc" -ne 0 ] || [ "${verify_danger:-0}" -gt 0 ] || [ "$verify_verdict" = "SUSPICIOUS" ] || [ "$verify_verdict" = "CRITICAL_RISK" ]; then
+                                verify_pkg "$repo" >&2 || true
+                                msg_warn "[projects-pull] Security check flagged '${repo_name}' (Danger: ${verify_danger}). Skipping automatic makepkg -sfi --noconfirm."
+                                msg_warn "[projects-pull] Inspect upstream changes manually: git -C '${repo}' diff ORIG_HEAD..HEAD"
+                                continue
+                            fi
+                        fi
                         msg_info "[projects-pull] Rebuilding and installing updated project '${repo_name}'..."
                         if run_as_user bash -c 'cd "$1" && makepkg -sfi --noconfirm' _ "$repo"; then
                             if declare -F dispatch_plugin_hooks >/dev/null; then

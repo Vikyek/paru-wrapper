@@ -505,5 +505,131 @@ exit 0
         )
 
 
+class TestParuWrapperSecurityHardening(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.home_dir = os.path.join(self.tmpdir.name, "home")
+        self.bin_dir = os.path.join(self.tmpdir.name, "bin")
+        self.projects_dir = os.path.join(self.tmpdir.name, "projects")
+        os.makedirs(self.home_dir)
+        os.makedirs(self.bin_dir)
+        os.makedirs(self.projects_dir)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _write_exec(self, name, body):
+        path = os.path.join(self.bin_dir, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+        return path
+
+    def test_verify_cloned_aur_dir_blocks_dangerous_pkg(self):
+        """verify_cloned_aur_dir aborts when verify_pkg reports danger > 0."""
+        build_dir = os.path.join(self.tmpdir.name, "aur-pkg")
+        os.makedirs(build_dir)
+        mock_verify = self._write_exec(
+            "verify_pkg",
+            """#!/usr/bin/env bash
+if [[ "${1:-}" == "--json" ]]; then
+    echo '{"danger_score":15,"verdict":"SUSPICIOUS","findings":[]}'
+    exit 0
+fi
+echo "Mock verify_pkg report"
+exit 1
+""",
+        )
+        env = os.environ.copy()
+        env["HOME"] = self.home_dir
+        env["NO_COLOR"] = "1"
+        env["PATH"] = f"{self.bin_dir}:{env.get('PATH', '')}"
+        res = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source "{PARU_WRAPPER_PATH}"\nverify_cloned_aur_dir "evil-pkg" "{build_dir}"',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("Aborting rebuild", res.stderr)
+        self.assertTrue(os.path.exists(mock_verify))
+
+    def test_projects_pull_does_not_source_pkgbuild_and_blocks_on_verify_pkg(self):
+        """25-projects-pull.sh parses pkgname safely without executing PKGBUILD and aborts on danger > 0."""
+        plugin_path = os.path.join(REPO_DIR, "default-plugins", "25-projects-pull.sh")
+        remote_repo = os.path.join(self.tmpdir.name, "remote.git")
+        local_repo = os.path.join(self.projects_dir, "demo-pkg")
+        pwn_marker = os.path.join(self.tmpdir.name, "pwned")
+        makepkg_marker = os.path.join(self.tmpdir.name, "makepkg_ran")
+
+        subprocess.run(["git", "init", "--bare", remote_repo], check=True, capture_output=True)
+        subprocess.run(["git", "clone", remote_repo, local_repo], check=True, capture_output=True)
+        subprocess.run(["git", "-C", local_repo, "config", "user.email", "t@example.com"], check=True)
+        subprocess.run(["git", "-C", local_repo, "config", "user.name", "Test"], check=True)
+        with open(os.path.join(local_repo, "PKGBUILD"), "w", encoding="utf-8") as f:
+            f.write("pkgname=demo-pkg\npkgver=1.0\npkgrel=1\narch=('any')\n")
+        subprocess.run(["git", "-C", local_repo, "add", "PKGBUILD"], check=True)
+        subprocess.run(["git", "-C", local_repo, "commit", "-m", "init"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", local_repo, "push", "origin", "HEAD"], check=True, capture_output=True)
+
+        # Push an upstream commit whose PKGBUILD would execute pwn_marker if sourced
+        pusher = os.path.join(self.tmpdir.name, "pusher")
+        subprocess.run(["git", "clone", remote_repo, pusher], check=True, capture_output=True)
+        subprocess.run(["git", "-C", pusher, "config", "user.email", "t@example.com"], check=True)
+        subprocess.run(["git", "-C", pusher, "config", "user.name", "Test"], check=True)
+        with open(os.path.join(pusher, "PKGBUILD"), "w", encoding="utf-8") as f:
+            f.write(
+                f"pkgname=('demo-pkg')\npkgver=1.1\npkgrel=1\narch=('any')\n"
+                f"touch '{pwn_marker}'\n"
+            )
+        subprocess.run(["git", "-C", pusher, "add", "PKGBUILD"], check=True)
+        subprocess.run(["git", "-C", pusher, "commit", "-m", "evil"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", pusher, "push", "origin", "HEAD"], check=True, capture_output=True)
+
+        self._write_exec(
+            "pacman",
+            '#!/usr/bin/env bash\nif [[ "${1:-}" == "-Qq" && "${2:-}" == "demo-pkg" ]]; then exit 0; fi\nexit 1\n',
+        )
+        self._write_exec(
+            "makepkg",
+            f'#!/usr/bin/env bash\ntouch "{makepkg_marker}"\nexit 0\n',
+        )
+        self._write_exec(
+            "verify_pkg",
+            """#!/usr/bin/env bash
+if [[ "${1:-}" == "--json" ]]; then
+    echo '{"danger_score":15,"verdict":"SUSPICIOUS","findings":[]}'
+    exit 0
+fi
+echo "Suspicious PKGBUILD"
+exit 1
+""",
+        )
+
+        env = os.environ.copy()
+        env["HOME"] = self.home_dir
+        env["PARU_WRAPPER_PROJECTS_DIR"] = self.projects_dir
+        env["PATH"] = f"{self.bin_dir}:{env.get('PATH', '')}"
+
+        res = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'msg_info() {{ echo "$*" >&2; }}\nmsg_warn() {{ echo "WARN: $*" >&2; }}\nsource "{plugin_path}"\nplugin_hook pre-transaction',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertFalse(os.path.exists(pwn_marker), "PKGBUILD was executed via source!")
+        self.assertFalse(os.path.exists(makepkg_marker), "makepkg ran despite verify_pkg danger > 0!")
+        self.assertIn("ORIG_HEAD..HEAD", res.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
