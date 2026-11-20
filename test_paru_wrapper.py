@@ -631,5 +631,128 @@ exit 1
         self.assertIn("ORIG_HEAD..HEAD", res.stderr)
 
 
+class TestParuWrapperRepoSigning(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.home_dir = os.path.join(self.tmpdir.name, "home")
+        self.config_dir = os.path.join(self.tmpdir.name, "xdg_config")
+        self.plugins_dir = os.path.join(self.config_dir, "paru-wrapper", "plugins.d")
+        self.repo_dir = os.path.join(self.tmpdir.name, "repo")
+        self.bin_dir = os.path.join(self.tmpdir.name, "bin")
+        for d in (self.home_dir, self.plugins_dir, self.repo_dir, self.bin_dir):
+            os.makedirs(d)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _write_exec(self, name, body):
+        path = os.path.join(self.bin_dir, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+        return path
+
+    def test_get_repo_sign_flags_reads_makepkg_conf_and_env(self):
+        """get_repo_sign_flags includes -s and -k <GPGKEY> from ~/.makepkg.conf or env."""
+        with open(os.path.join(self.home_dir, ".makepkg.conf"), "w", encoding="utf-8") as f:
+            f.write('GPGKEY="ABC123DEF456"\n')
+
+        env = os.environ.copy()
+        env["HOME"] = self.home_dir
+        env.pop("GPGKEY", None)
+        env.pop("PARU_WRAPPER_GPGKEY", None)
+
+        res = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source "{PARU_WRAPPER_PATH}"\nflags=()\nget_repo_sign_flags flags\nprintf "%s\\n" "${{flags[@]}}"',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertEqual(res.stdout.splitlines(), ["-s", "-k", "ABC123DEF456"])
+
+        env["PARU_WRAPPER_GPGKEY"] = "OVERRIDE999"
+        res2 = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source "{PARU_WRAPPER_PATH}"\nflags=()\nget_repo_sign_flags flags\nprintf "%s\\n" "${{flags[@]}}"',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res2.returncode, 0, msg=res2.stderr)
+        self.assertEqual(res2.stdout.splitlines(), ["-s", "-k", "OVERRIDE999"])
+
+    def test_rebuild_passes_signing_flags_to_repo_remove_and_cleans_sig(self):
+        """--rebuild passes -s -k <key> to repo-remove and purges stale .sig files."""
+        db_path = os.path.join(self.repo_dir, "MKVPKG.db.tar.gz")
+        with open(db_path, "wb") as f:
+            f.write(b"")
+        stale_pkg = os.path.join(self.repo_dir, "demo-1.0-1-any.pkg.tar.zst")
+        stale_sig = f"{stale_pkg}.sig"
+        with open(stale_pkg, "wb") as f:
+            f.write(b"pkg")
+        with open(stale_sig, "wb") as f:
+            f.write(b"sig")
+
+        with open(os.path.join(self.home_dir, ".makepkg.conf"), "w", encoding="utf-8") as f:
+            f.write('GPGKEY="FPR_TEST_KEY"\n')
+
+        conf_dir = os.path.join(self.home_dir, ".config", "paru-wrapper")
+        os.makedirs(conf_dir, exist_ok=True)
+        with open(os.path.join(conf_dir, "paru-wrapper.conf"), "w", encoding="utf-8") as f:
+            f.write(
+                f'PARU_WRAPPER_REPO="MKVPKG"\n'
+                f'PARU_WRAPPER_REPO_DB="{db_path}"\n'
+                f'PARU_WRAPPER_PROJECTS_DIR="{self.tmpdir.name}/projects"\n'
+            )
+
+        for pname in (
+            "10-snapper.sh",
+            "20-anneal.sh",
+            "25-projects-pull.sh",
+            "30-rebuild-check.sh",
+            "40-paru-completion.sh",
+            "50-vault-sync.sh",
+        ):
+            with open(os.path.join(self.plugins_dir, pname), "w", encoding="utf-8") as f:
+                f.write("#!/bin/bash\nplugin_hook() { :; }\n")
+
+        trace_file = os.path.join(self.tmpdir.name, "repo_calls.log")
+        self._write_exec(
+            "repo-remove",
+            f'#!/usr/bin/env bash\necho "repo-remove:$*" >> "{trace_file}"\nexit 0\n',
+        )
+        self._write_exec("pacman", "#!/usr/bin/env bash\nexit 0\n")
+        self._write_exec("sudo", "#!/usr/bin/env bash\nexit 0\n")
+        mock_paru = self._write_exec("mock-paru", "#!/usr/bin/env bash\nexit 0\n")
+
+        env = os.environ.copy()
+        env["HOME"] = self.home_dir
+        env["XDG_CONFIG_HOME"] = self.config_dir
+        env["XDG_CACHE_HOME"] = os.path.join(self.tmpdir.name, "cache")
+        env["NO_COLOR"] = "1"
+        env["PARU_BIN"] = mock_paru
+        env["PATH"] = f"{self.bin_dir}:{env.get('PATH', '')}"
+
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "--rebuild", "demo"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertFalse(os.path.exists(stale_pkg))
+        self.assertFalse(os.path.exists(stale_sig))
+        with open(trace_file, encoding="utf-8") as f:
+            self.assertIn(f"repo-remove:-s -k FPR_TEST_KEY -w {db_path} demo", f.read())
+
+
 if __name__ == "__main__":
     unittest.main()

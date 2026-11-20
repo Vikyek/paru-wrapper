@@ -321,6 +321,53 @@ wait_for_network() {
     done
 }
 
+# Read a single variable assignment from ~/.makepkg.conf or /etc/makepkg.conf
+read_makepkg_var() {
+    local var_name="$1"
+    local conf val
+    for conf in "${HOME:-}/.makepkg.conf" "/etc/makepkg.conf"; do
+        [[ -r "$conf" ]] || continue
+        val=$(awk -F '=' -v key="$var_name" '
+            $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+                val=$2
+                sub(/[[:space:]]*#.*/, "", val)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+                gsub(/^["'\'']|["'\'']$/, "", val)
+                print val
+            }
+        ' "$conf" 2>/dev/null | tail -n 1 || true)
+        if [[ -n "$val" ]]; then
+            printf '%s\n' "$val"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Resolve GPG signing key from env or makepkg.conf
+get_makepkg_gpgkey() {
+    if [[ -n "${PARU_WRAPPER_GPGKEY:-}" ]]; then
+        printf '%s\n' "$PARU_WRAPPER_GPGKEY"
+        return 0
+    fi
+    if [[ -n "${GPGKEY:-}" ]]; then
+        printf '%s\n' "$GPGKEY"
+        return 0
+    fi
+    read_makepkg_var "GPGKEY"
+}
+
+# Populate target array with repo-add/repo-remove signing flags (-s and optional -k <key>)
+get_repo_sign_flags() {
+    local -n _out_flags="$1"
+    local gpg_key=""
+    _out_flags=(-s)
+    gpg_key=$(get_makepkg_gpgkey 2>/dev/null || true)
+    if [[ -n "$gpg_key" ]]; then
+        _out_flags+=(-k "$gpg_key")
+    fi
+}
+
 # List directories where pacman/makepkg store partial downloads (.part / download-*)
 collect_part_search_dirs() {
     if [[ -n "${PARU_WRAPPER_PART_SEARCH_DIRS:-}" ]]; then
@@ -349,14 +396,7 @@ collect_part_search_dirs() {
 
     local srcdest="${SRCDEST:-}"
     if [[ -z "$srcdest" ]]; then
-        local conf
-        for conf in "${HOME:-}/.makepkg.conf" "/etc/makepkg.conf"; do
-            [[ -r "$conf" ]] || continue
-            srcdest=$(awk -F '=' '/^[[:space:]]*SRCDEST[[:space:]]*=/{ val=$2; sub(/[[:space:]]*#.*/, "", val); gsub(/^[[:space:]]+|[[:space:]]+$/, "", val); gsub(/^["'\'']|["'\'']$/, "", val); print val }' "$conf" 2>/dev/null | tail -n 1 || true)
-            if [[ -n "$srcdest" ]]; then
-                break
-            fi
-        done
+        srcdest=$(read_makepkg_var "SRCDEST" || true)
     fi
     if [[ -n "$srcdest" ]]; then
         printf '%s\n' "$srcdest"
@@ -648,8 +688,12 @@ arch=('any')
 license=('GPL')
 EOF
         (cd "$DUMMY_DIR" || exit 1; makepkg -s --noconfirm >/dev/null 2>&1 || true)
-        repo-add "$REPO_DB" "$DUMMY_DIR/dummy-1-1-any.pkg.tar.zst" >/dev/null 2>&1 || true
-        repo-remove "$REPO_DB" dummy >/dev/null 2>&1 || true
+        local init_sign_flags=()
+        if init_gpg_key=$(get_makepkg_gpgkey 2>/dev/null) && [[ -n "$init_gpg_key" ]]; then
+            init_sign_flags=(-s -k "$init_gpg_key")
+        fi
+        repo-add "${init_sign_flags[@]}" "$REPO_DB" "$DUMMY_DIR/dummy-1-1-any.pkg.tar.zst" >/dev/null 2>&1 || true
+        repo-remove "${init_sign_flags[@]}" "$REPO_DB" dummy >/dev/null 2>&1 || true
         rm -rf "$DUMMY_DIR"
         echo "Initialized empty repository at $REPO_DB"
     fi
@@ -892,7 +936,7 @@ if [ "$is_transaction" = true ]; then
                     pkg_name=$(echo "$pkg_base" | sed -E 's/-[0-9].*//')
                     if [[ ! "$pkg_name" =~ -git$ ]] && pacman -Qq "${pkg_name}-git" >/dev/null 2>&1; then
                         msg_info "Skipping auto-indexing of '$pkg_base' because installed '${pkg_name}-git' takes priority."
-                        rm -f "$pkg_file" 2>/dev/null || true
+                        rm -f "$pkg_file" "${pkg_file}.sig" 2>/dev/null || true
                     else
                         filtered_new_pkgs+=("$pkg_file")
                     fi
@@ -906,11 +950,13 @@ if [ "$is_transaction" = true ]; then
                     echo "  -> $(basename "$pkg")" >&2
                 done
                 msg_info "Automatically updating $PARU_WRAPPER_REPO repository database at ${PARU_WRAPPER_REPO_DB}..."
+                local repo_sign_flags=()
+                get_repo_sign_flags repo_sign_flags
                 if [ "$DRY_RUN" = true ]; then
-                    msg_info "DRY RUN: would run: repo-add -R -w \"${PARU_WRAPPER_REPO_DB}\" \"${new_pkgs[*]}\""
+                    msg_info "DRY RUN: would run: repo-add ${repo_sign_flags[*]} -R -w \"${PARU_WRAPPER_REPO_DB}\" \"${new_pkgs[*]}\""
                 else
                     if ensure_repo_lock_clear "$PARU_WRAPPER_REPO_DB"; then
-                        repo-add -R -w "$PARU_WRAPPER_REPO_DB" "${new_pkgs[@]}" || msg_warn "Failed to update repository database"
+                        repo-add "${repo_sign_flags[@]}" -R -w "$PARU_WRAPPER_REPO_DB" "${new_pkgs[@]}" || msg_warn "Failed to update repository database"
                         msg_info "$PARU_WRAPPER_REPO repository database updated successfully."
                     else
                         msg_warn "Skipping repository database update because lockfile could not be acquired."
@@ -963,9 +1009,11 @@ if [ "$is_transaction" = true ]; then
         for pkg in "${targets[@]}"; do
             pkg_name="${pkg#*/}"
             echo "[paru-wrapper] Rebuild requested for '$pkg'. Purging stale binaries from $PARU_WRAPPER_REPO..." >&2
-            rm -f "$REPO_DIR/$pkg_name-"*.pkg.tar.zst 2>/dev/null || true
+            rm -f "$REPO_DIR/$pkg_name-"*.pkg.tar.zst "$REPO_DIR/$pkg_name-"*.pkg.tar.zst.sig 2>/dev/null || true
             if ensure_repo_lock_clear "$PARU_WRAPPER_REPO_DB"; then
-                repo-remove -w "$PARU_WRAPPER_REPO_DB" "$pkg_name" 2>/dev/null || true
+                repo_sign_flags=()
+                get_repo_sign_flags repo_sign_flags
+                repo-remove "${repo_sign_flags[@]}" -w "$PARU_WRAPPER_REPO_DB" "$pkg_name" 2>/dev/null || true
             fi
         done
         sudo pacman -Sy >/dev/null 2>&1 || true

@@ -18,6 +18,42 @@ repo_name = os.environ.get("PARU_WRAPPER_REPO", "")
 auto_update_installed_env = os.environ.get("PARU_WRAPPER_AUTO_UPDATE_INSTALLED", "true").lower()
 auto_update_installed = auto_update_installed_env in ("true", "1", "yes", "on")
 
+
+def get_makepkg_gpgkey():
+    """
+    Resolves the GPG signing key from environment variables or makepkg.conf.
+
+    @returns Key fingerprint/ID string if configured, otherwise an empty string
+    """
+    env_key = os.environ.get("PARU_WRAPPER_GPGKEY") or os.environ.get("GPGKEY")
+    if env_key:
+        return env_key.strip().strip("'\"")
+
+    home = os.environ.get("HOME", "")
+    conf_paths = [os.path.join(home, ".makepkg.conf")] if home else []
+    conf_paths.append("/etc/makepkg.conf")
+    for conf in conf_paths:
+        if not os.path.isfile(conf):
+            continue
+        found = ""
+        try:
+            with open(conf, "r", encoding="utf-8") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#"):
+                        continue
+                    if stripped.startswith("GPGKEY") and "=" in stripped:
+                        key_part, val_part = stripped.split("=", 1)
+                        if key_part.strip() == "GPGKEY":
+                            val = val_part.split("#", 1)[0].strip().strip("'\"")
+                            if val:
+                                found = val
+        except OSError:
+            continue
+        if found:
+            return found
+    return ""
+
 def run_cmd(cmd):
     """
     Executes an executable with its arguments and returns its standard output.
@@ -419,6 +455,7 @@ def main():
         pkgs_to_remove = validated_pkgs_to_remove
 
     if pkgs_to_remove:
+        gpg_key = get_makepkg_gpgkey()
         try:
             for i in range(0, len(pkgs_to_remove), 100):
                 if not ensure_repo_lock_clear(db_path):
@@ -428,7 +465,11 @@ def main():
                     )
                     break
                 batch = pkgs_to_remove[i:i + 100]
-                subprocess.run(["repo-remove", "-w", "--", db_path] + batch, check=True) # nosec
+                cmd = ["repo-remove", "-s"]
+                if gpg_key:
+                    cmd.extend(["-k", gpg_key])
+                cmd.extend(["-w", "--", db_path] + batch)
+                subprocess.run(cmd, check=True) # nosec
                 db_changed = True
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             sys.stderr.write(f"{c_warn}⚠ [update_mkvpkg_aur] Warning:{c_reset} Failed to run repo-remove: {e}\n")
