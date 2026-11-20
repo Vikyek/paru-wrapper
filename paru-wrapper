@@ -10,6 +10,7 @@
 
 set -euo pipefail
 
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 # Intercept wrapper-specific help
 if [[ "${1:-}" == "--wrapper-help" ]]; then
     cat << 'EOF'
@@ -50,6 +51,9 @@ Environment Variables:
     PARU_WRAPPER_PROJECTS_DIR            Root path to local package projects (~/Projects)
     PARU_WRAPPER_AUTO_UPDATE_INSTALLED   Auto-upgrade AUR repo and updated Projects packages (default: true)
     PARU_WRAPPER_DRY_RUN                 Simulate operations without executing (default: false)
+    PARU_WRAPPER_NET_RETRY_MAX           Max network-drop / partial-download resume retries (default: 5)
+    PARU_WRAPPER_NET_WAIT_TIMEOUT        Seconds to wait for network recovery (default: 1800, 0 disables)
+    PARU_WRAPPER_NET_CHECK_URL           URL probed for connectivity recovery (default: https://archlinux.org)
     FORCE_REBUILD                        Rebuild package from source (default: 0)
 
 All other arguments and flags are passed directly to upstream paru.
@@ -83,6 +87,7 @@ for arg in "$@"; do
         exec "$gittinator_helper" "$@"
     fi
 done
+fi
 
 if [ -z "${NO_COLOR:-}" ] && [ -t 2 ]; then
     C_INFO='\e[1;34m'
@@ -186,7 +191,7 @@ fetch_aur_metadata_batch() {
 }
 
 # Purge corrupted paru clone cache directories (missing/broken .git or unreadable objects)
-PARU_CLONE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/paru/clone"
+PARU_CLONE_DIR="${PARU_CLONE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/paru/clone}"
 
 is_broken_clone() {
     local d="$1"
@@ -223,35 +228,237 @@ purge_broken_clones() {
     return 0
 }
 
-# Run paru with auto-retry on corrupted clone cache errors
-run_paru_with_clone_repair() {
-    local max_retries=3 attempt=0 exit_code=0
+_CURRENT_ATTEMPT_MARKER=""
 
-    while ((attempt < max_retries)); do
-        ((++attempt))
-        exit_code=0
-        /usr/bin/paru "$@" || exit_code=$?
+# Check whether network connectivity to Arch infrastructure is currently available
+is_network_online() {
+    if [[ -n "${PARU_WRAPPER_NET_CHECK_CMD:-}" ]]; then
+        bash -c "$PARU_WRAPPER_NET_CHECK_CMD" >/dev/null 2>&1
+        return $?
+    fi
 
-        if [[ $exit_code -ne 0 ]]; then
-            # Scan for broken clone dirs that may have caused the failure
-            local repaired=false
-            if [[ -d "$PARU_CLONE_DIR" ]]; then
-                for d in "$PARU_CLONE_DIR"/*/; do
-                    [[ -d "$d" ]] || continue
-                    if is_broken_clone "$d"; then
-                        local pkg_name
-                        pkg_name=$(basename "$d")
-                        msg_info "Auto-repairing corrupted clone cache: $pkg_name (attempt $attempt/$max_retries)"
-                        rm -rf "${d%/}"
-                        repaired=true
-                    fi
-                done
-            fi
-            if [[ "$repaired" == true ]]; then continue; fi
+    if command -v ip >/dev/null 2>&1; then
+        if [[ -z "$(ip -4 route show default 2>/dev/null)$(ip -6 route show default 2>/dev/null)" ]]; then
+            return 1
         fi
-        break
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSIL --connect-timeout 3 --max-time 5 "${PARU_WRAPPER_NET_CHECK_URL:-https://archlinux.org}" >/dev/null 2>&1
+        return $?
+    fi
+
+    if command -v nm-online >/dev/null 2>&1; then
+        nm-online -q -t 2 >/dev/null 2>&1
+        return $?
+    fi
+
+    return 0
+}
+
+# Wait with exponential backoff until network connectivity recovers or timeout expires
+wait_for_network() {
+    local timeout="${1:-${PARU_WRAPPER_NET_WAIT_TIMEOUT:-1800}}"
+    if (( timeout <= 0 )); then
+        return 1
+    fi
+
+    local start_ts now elapsed delay max_delay=30 last_log=0
+    delay="${PARU_WRAPPER_NET_POLL_INTERVAL:-2}"
+    if (( delay < 1 )); then
+        delay=1
+    fi
+    printf -v start_ts '%(%s)T' -1
+
+    while true; do
+        if is_network_online; then
+            return 0
+        fi
+
+        printf -v now '%(%s)T' -1
+        elapsed=$((now - start_ts))
+        if (( elapsed >= timeout )); then
+            msg_warn "Timed out after ${timeout}s waiting for network connectivity."
+            return 1
+        fi
+
+        if (( last_log == 0 || now - last_log >= 15 )); then
+            msg_info "Waiting for network connectivity to resume (${elapsed}s/${timeout}s)..."
+            last_log=$now
+        fi
+
+        local remaining=$((timeout - elapsed))
+        local sleep_for=$delay
+        if (( sleep_for > remaining )); then
+            sleep_for=$remaining
+        fi
+        sleep "$sleep_for"
+
+        delay=$((delay * 2))
+        if (( delay > max_delay )); then
+            delay=$max_delay
+        fi
     done
-    return $exit_code
+}
+
+# List directories where pacman/makepkg store partial downloads (.part / download-*)
+collect_part_search_dirs() {
+    if [[ -n "${PARU_WRAPPER_PART_SEARCH_DIRS:-}" ]]; then
+        local IFS=':'
+        local dirs=()
+        read -r -a dirs <<< "$PARU_WRAPPER_PART_SEARCH_DIRS"
+        printf '%s\n' "${dirs[@]}"
+        return 0
+    fi
+
+    local pacman_conf="${PARU_WRAPPER_PACMAN_CONF:-/etc/pacman.conf}"
+    local found_cache=false
+    if [[ -r "$pacman_conf" ]]; then
+        local cache_dir
+        while IFS= read -r cache_dir; do
+            [[ -n "$cache_dir" ]] || continue
+            printf '%s\n' "$cache_dir"
+            found_cache=true
+        done < <(awk -F '=' '/^[[:space:]]*CacheDir[[:space:]]*=/{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2 }' "$pacman_conf" 2>/dev/null || true)
+    fi
+    if [[ "$found_cache" == false ]]; then
+        printf '%s\n' "/var/cache/pacman/pkg"
+    fi
+
+    printf '%s\n' "/var/lib/pacman/sync"
+
+    local srcdest="${SRCDEST:-}"
+    if [[ -z "$srcdest" ]]; then
+        local conf
+        for conf in "${HOME:-}/.makepkg.conf" "/etc/makepkg.conf"; do
+            [[ -r "$conf" ]] || continue
+            srcdest=$(awk -F '=' '/^[[:space:]]*SRCDEST[[:space:]]*=/{ val=$2; sub(/[[:space:]]*#.*/, "", val); gsub(/^[[:space:]]+|[[:space:]]+$/, "", val); gsub(/^["'\'']|["'\'']$/, "", val); print val }' "$conf" 2>/dev/null | tail -n 1 || true)
+            if [[ -n "$srcdest" ]]; then
+                break
+            fi
+        done
+    fi
+    if [[ -n "$srcdest" ]]; then
+        printf '%s\n' "$srcdest"
+    fi
+
+    if [[ -n "${PARU_CLONE_DIR:-}" ]]; then
+        printf '%s\n' "$PARU_CLONE_DIR"
+    fi
+}
+
+# Return 0 if any .part file or pacman download-* staging dir was touched since marker
+has_recent_part_files() {
+    local marker="$1"
+    [[ -f "$marker" ]] || return 1
+
+    local d match
+    while IFS= read -r d; do
+        [[ -d "$d" ]] || continue
+        match=$(find "$d" -maxdepth 2 \( -name '*.part' -o -name 'download-*' \) -newer "$marker" -print -quit 2>/dev/null || true)
+        if [[ -n "$match" ]]; then
+            return 0
+        fi
+    done < <(collect_part_search_dirs)
+    return 1
+}
+
+# Run a command with automatic network-drop wait-and-resume (and optional clone repair).
+# Pacman (.part in CacheDir) and makepkg (curl -C - .part in SRCDEST) resume natively on re-run.
+_run_resumable() {
+    local repair_clones="$1"
+    shift
+
+    local max_clone_retries="${PARU_WRAPPER_CLONE_REPAIR_MAX:-3}"
+    local max_net_retries="${PARU_WRAPPER_NET_RETRY_MAX:-5}"
+    local max_part_retries="${PARU_WRAPPER_PART_RETRY_MAX:-2}"
+    local retry_delay="${PARU_WRAPPER_RETRY_DELAY:-2}"
+    local clone_attempts=0 net_attempts=0 part_attempts=0 exit_code=0
+
+    while true; do
+        _CURRENT_ATTEMPT_MARKER=$(mktemp)
+        exit_code=0
+        "$@" || exit_code=$?
+
+        if [[ $exit_code -eq 0 ]]; then
+            rm -f "$_CURRENT_ATTEMPT_MARKER"
+            _CURRENT_ATTEMPT_MARKER=""
+            return 0
+        fi
+
+        # Never retry on signal termination (SIGINT=130, SIGQUIT=131, SIGTERM=143).
+        # Exit code 128 is git's fatal error code, not a signal.
+        if [[ $exit_code -gt 128 ]]; then
+            rm -f "$_CURRENT_ATTEMPT_MARKER"
+            _CURRENT_ATTEMPT_MARKER=""
+            return "$exit_code"
+        fi
+
+        # Scan for broken clone dirs that may have caused a paru failure
+        if [[ "$repair_clones" == "1" ]] && ((clone_attempts < max_clone_retries)) && [[ -d "$PARU_CLONE_DIR" ]]; then
+            local repaired=false
+            for d in "$PARU_CLONE_DIR"/*/; do
+                [[ -d "$d" ]] || continue
+                if is_broken_clone "$d"; then
+                    local pkg_name
+                    pkg_name=$(basename "$d")
+                    msg_info "Auto-repairing corrupted clone cache: $pkg_name (attempt $((clone_attempts + 1))/$max_clone_retries)"
+                    rm -rf "${d%/}"
+                    repaired=true
+                fi
+            done
+            if [[ "$repaired" == true ]]; then
+                ((++clone_attempts))
+                rm -f "$_CURRENT_ATTEMPT_MARKER"
+                _CURRENT_ATTEMPT_MARKER=""
+                if ! is_network_online; then
+                    msg_warn "Network connectivity lost during clone. Waiting for network to recover before retrying..."
+                    if ! wait_for_network; then
+                        return "$exit_code"
+                    fi
+                fi
+                continue
+            fi
+        fi
+
+        # Wait for network recovery or resume interrupted .part downloads
+        if ((net_attempts < max_net_retries)); then
+            if ! is_network_online; then
+                rm -f "$_CURRENT_ATTEMPT_MARKER"
+                _CURRENT_ATTEMPT_MARKER=""
+                msg_warn "Network connectivity lost mid-operation (exit code $exit_code). Waiting for network to recover before resuming..."
+                if wait_for_network; then
+                    ((++net_attempts))
+                    part_attempts=0
+                    msg_info "Network connectivity restored. Resuming operation (attempt $net_attempts/$max_net_retries)..."
+                    continue
+                fi
+                return "$exit_code"
+            elif has_recent_part_files "$_CURRENT_ATTEMPT_MARKER" && ((part_attempts < max_part_retries)); then
+                rm -f "$_CURRENT_ATTEMPT_MARKER"
+                _CURRENT_ATTEMPT_MARKER=""
+                ((++part_attempts))
+                ((++net_attempts))
+                msg_info "Detected interrupted partial download (.part). Resuming in ${retry_delay}s (attempt $net_attempts/$max_net_retries)..."
+                sleep "$retry_delay"
+                continue
+            fi
+        fi
+
+        rm -f "$_CURRENT_ATTEMPT_MARKER"
+        _CURRENT_ATTEMPT_MARKER=""
+        return "$exit_code"
+    done
+}
+
+# Run paru with auto-retry on corrupted clone cache errors and network interruptions
+run_paru_with_clone_repair() {
+    _run_resumable 1 "${PARU_BIN:-/usr/bin/paru}" "$@"
+}
+
+# Run a download/build command with automatic network-drop wait-and-resume
+run_with_network_resume() {
+    _run_resumable 0 "$@"
 }
 
 # Check whether a PID belongs to an active repo-add/repo-remove process
@@ -385,7 +592,14 @@ PARU_WRAPPER_REPO_DB="${PARU_WRAPPER_REPO_DB:-${PARU_WRAPPER_REPO_DIR:+${PARU_WR
 PARU_WRAPPER_PROJECTS_DIR="${PARU_WRAPPER_PROJECTS_DIR:-${HOME:-/root}/Projects}"
 PARU_WRAPPER_DRY_RUN="${PARU_WRAPPER_DRY_RUN:-false}"
 PARU_WRAPPER_AUTO_UPDATE_INSTALLED="${PARU_WRAPPER_AUTO_UPDATE_INSTALLED:-true}"
+PARU_WRAPPER_CLONE_REPAIR_MAX="${PARU_WRAPPER_CLONE_REPAIR_MAX:-3}"
+PARU_WRAPPER_NET_RETRY_MAX="${PARU_WRAPPER_NET_RETRY_MAX:-5}"
+PARU_WRAPPER_NET_WAIT_TIMEOUT="${PARU_WRAPPER_NET_WAIT_TIMEOUT:-1800}"
+PARU_WRAPPER_NET_CHECK_URL="${PARU_WRAPPER_NET_CHECK_URL:-https://archlinux.org}"
+PARU_WRAPPER_PART_RETRY_MAX="${PARU_WRAPPER_PART_RETRY_MAX:-2}"
+PARU_WRAPPER_RETRY_DELAY="${PARU_WRAPPER_RETRY_DELAY:-2}"
 
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 # Handle initialization commands
 if [ "${1:-}" = "--init-repo" ]; then
     if [ "$#" -ne 4 ]; then
@@ -575,7 +789,7 @@ if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
                        /etc/pacman.d/hooks/paru-completion-update.hook \
                        /etc/pacman.d/hooks/rebuild-check.hook 2>/dev/null || true
         fi
-        rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
+        rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" "${_CURRENT_ATTEMPT_MARKER:-}" 2>/dev/null || true
 
         # Automatically update custom repository database with any packages built during the wrapper run
         if [ -n "$PARU_WRAPPER_REPO" ] && [ -f "$start_marker" ]; then
@@ -729,7 +943,7 @@ if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
                     if [ "$DRY_RUN" = true ]; then
                         msg_info "DRY RUN: would run: (cd \"${PARU_WRAPPER_PROJECTS_DIR}/${pkg}\" && makepkg -sfi --noconfirm)"
                     else
-                        if (cd "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}" && makepkg -sfi --noconfirm); then
+                        if (cd "${PARU_WRAPPER_PROJECTS_DIR}/${pkg}" && run_with_network_resume makepkg -sfi --noconfirm); then
                             dispatch_plugin_hooks package-rebuilt "$pkg"
                         fi
                     fi
@@ -744,7 +958,7 @@ if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
                 else
                     build_dir=$(mktemp -d)
                     if git clone --depth 1 "https://aur.archlinux.org/$pkg.git" "$build_dir" 2>/dev/null; then
-                        if (cd "$build_dir" && makepkg -sfi --noconfirm); then
+                        if (cd "$build_dir" && run_with_network_resume makepkg -sfi --noconfirm); then
                             dispatch_plugin_hooks package-rebuilt "$pkg"
                         fi
                         rm -rf "$build_dir"
@@ -786,7 +1000,7 @@ if [ "$is_transaction" = true ] || [ "$is_search_install" = true ]; then
             mv -f -T "$tmp_comp" "$CACHE_DIR/paru_completed_packages"
         fi
     else
-        rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" 2>/dev/null || true
+        rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" "${_CURRENT_ATTEMPT_MARKER:-}" 2>/dev/null || true
     fi
 
     # 2. Get the list of all current orphans
@@ -919,3 +1133,4 @@ if [ "${exit_code:-0}" -eq 0 ] && { [ "$is_transaction" = true ] || [ "$is_searc
 fi
 
 exit ${exit_code:-0}
+fi

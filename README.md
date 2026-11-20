@@ -45,6 +45,7 @@ paru-wrapper --wrapper-version
 - **Automated Local AUR Repository Sync (`myrepo`):** Integrates custom local repository management (`update_mkvpkg_aur.py`). Detects when newer upstream AUR versions exist, triggers automated package rebuilds, and prunes superseded non-git packages when `-git` builds take priority.
 - **Dependency-Aware Orphan Pruning:** Automatically tracks dependencies introduced during builds and safely prunes true orphans without removing shared libraries required by freshly compiled packages.
 - **Transparent Dual Wrapper:** Wraps both `paru` and `pacman` seamlessly. Non-wrapper arguments and subcommands pass directly to upstream binaries (`/usr/bin/paru`, `/usr/bin/pacman`) with zero overhead or impedance mismatch.
+- **Resilient Download Recovery:** Automatically detects mid-download network drops and interrupted partial downloads (`.part`), waits with exponential backoff for connectivity recovery, and re-runs `paru`/`makepkg` so `pacman` and `makepkg` (`curl -C -`) resume seamlessly from `.part` files.
 
 ---
 
@@ -170,6 +171,9 @@ paru-wrapper/
 | `PARU_WRAPPER_PROJECTS_DIR` | `~/Projects` | Root path to local development project source checkouts. |
 | `PARU_WRAPPER_AUTO_UPDATE_INSTALLED` | `1` | Automatically upgrades local custom repository packages when a newer AUR version is found and rebuilds/installs updated installed projects in `$PARU_WRAPPER_PROJECTS_DIR`. Set to `0`/`false` to disable. |
 | `PARU_WRAPPER_DRY_RUN` | `false` | Simulates actions without making changes to filesystem or databases. |
+| `PARU_WRAPPER_NET_RETRY_MAX` | `5` | Maximum automatic resume retries after mid-download network drops or interrupted `.part` transfers. |
+| `PARU_WRAPPER_NET_WAIT_TIMEOUT` | `1800` | Maximum seconds to wait for network connectivity recovery before aborting (`0` disables waiting). |
+| `PARU_WRAPPER_NET_CHECK_URL` | `https://archlinux.org` | HTTPS endpoint probed when verifying connectivity recovery. |
 | `FORCE_REBUILD` | `0` | When set to `1`, forces recompilation of target packages from source. |
 
 ---
