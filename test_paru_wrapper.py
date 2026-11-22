@@ -131,6 +131,38 @@ exit 0
             self.assertEqual(f.read().strip(), "2")
         self.assertIn("Detected interrupted partial download (.part)", res.stderr)
 
+    def test_download_staging_dir_without_part_file_does_not_retry(self):
+        """libalpm download-* staging dirs without .part files must not trigger retry."""
+        paru_calls = os.path.join(self.tmpdir.name, "paru_calls")
+        staging_dir = os.path.join(self.cache_dir, "download-a1b2c3")
+
+        mock_paru = self._write_exec(
+            "mock-paru",
+            f"""#!/usr/bin/env bash
+count=0
+[[ -f "{paru_calls}" ]] && count=$(cat "{paru_calls}")
+count=$((count + 1))
+echo "$count" > "{paru_calls}"
+sleep 0.05
+mkdir -p "{staging_dir}"
+exit 1
+""",
+        )
+
+        res = self._run_sourced_bash(
+            "run_paru_with_clone_repair -S bigpkg",
+            env={
+                "PARU_BIN": mock_paru,
+                "PARU_WRAPPER_NET_CHECK_CMD": "true",
+                "PARU_WRAPPER_PART_RETRY_MAX": "2",
+                "PARU_WRAPPER_NET_RETRY_MAX": "5",
+            },
+        )
+        self.assertEqual(res.returncode, 1)
+        with open(paru_calls, encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), "1")
+        self.assertNotIn("Detected interrupted partial download (.part)", res.stderr)
+
     def test_non_network_error_does_not_retry(self):
         """Online non-network errors (e.g. target not found) exit immediately without retry."""
         paru_calls = os.path.join(self.tmpdir.name, "paru_calls")

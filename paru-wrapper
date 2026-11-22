@@ -368,7 +368,7 @@ get_repo_sign_flags() {
     fi
 }
 
-# List directories where pacman/makepkg store partial downloads (.part / download-*)
+# List directories where pacman/makepkg store partial downloads (.part)
 collect_part_search_dirs() {
     if [[ -n "${PARU_WRAPPER_PART_SEARCH_DIRS:-}" ]]; then
         local IFS=':'
@@ -407,7 +407,7 @@ collect_part_search_dirs() {
     fi
 }
 
-# Return 0 if any .part file or pacman download-* staging dir was touched since marker
+# Return 0 if any .part file (including inside libalpm download-* staging dirs) was touched since marker
 has_recent_part_files() {
     local marker="$1"
     [[ -f "$marker" ]] || return 1
@@ -415,7 +415,7 @@ has_recent_part_files() {
     local d match
     while IFS= read -r d; do
         [[ -d "$d" ]] || continue
-        match=$(find "$d" -maxdepth 2 \( -name '*.part' -o -name 'download-*' \) -newer "$marker" -print -quit 2>/dev/null || true)
+        match=$(find "$d" -maxdepth 2 -type f -name '*.part' -newer "$marker" -print -quit 2>/dev/null || true)
         if [[ -n "$match" ]]; then
             return 0
         fi
