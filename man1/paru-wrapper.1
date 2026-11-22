@@ -87,6 +87,9 @@ Maximum seconds to wait for network connectivity recovery before aborting (defau
 .B PARU_WRAPPER_NET_CHECK_URL
 URL probed to verify connectivity recovery (default: \fIhttps://archlinux.org\fR).
 .TP
+.B PARU_WRAPPER_BUILD_USER
+Non-root user used for AUR/makepkg builds when \fBparu-wrapper\fR is invoked as root (defaults to \fISUDO_USER\fR or active session user).
+.TP
 .B FORCE_REBUILD
 When set to 1, forces recompilation of target packages from source.
 .SH SEE ALSO

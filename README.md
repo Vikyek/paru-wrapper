@@ -174,6 +174,7 @@ paru-wrapper/
 | `PARU_WRAPPER_NET_RETRY_MAX` | `5` | Maximum automatic resume retries after mid-download network drops or interrupted `.part` transfers. |
 | `PARU_WRAPPER_NET_WAIT_TIMEOUT` | `1800` | Maximum seconds to wait for network connectivity recovery before aborting (`0` disables waiting). |
 | `PARU_WRAPPER_NET_CHECK_URL` | `https://archlinux.org` | HTTPS endpoint probed when verifying connectivity recovery. |
+| `PARU_WRAPPER_BUILD_USER` | *(auto-detected)* | Non-root build user to drop privileges to when invoked as root. |
 | `FORCE_REBUILD` | `0` | When set to `1`, forces recompilation of target packages from source. |
 
 ---

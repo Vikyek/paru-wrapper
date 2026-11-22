@@ -54,6 +54,7 @@ Environment Variables:
     PARU_WRAPPER_NET_RETRY_MAX           Max network-drop / partial-download resume retries (default: 5)
     PARU_WRAPPER_NET_WAIT_TIMEOUT        Seconds to wait for network recovery (default: 1800, 0 disables)
     PARU_WRAPPER_NET_CHECK_URL           URL probed for connectivity recovery (default: https://archlinux.org)
+    PARU_WRAPPER_BUILD_USER              Non-root build user when invoked as root (auto-detected)
     FORCE_REBUILD                        Rebuild package from source (default: 0)
 
 All other arguments and flags are passed directly to upstream paru.
@@ -104,6 +105,61 @@ fi
 msg_info() { echo -e "${C_INFO}[paru-wrapper]${C_RESET} $*" >&2; }
 msg_warn() { echo -e "${C_WARN}[paru-wrapper] Warning:${C_RESET} $*" >&2; }
 
+_PW_INVOKING_USER=""
+_PW_INVOKING_HOME="${HOME:-}"
+_resolve_invoking_user() {
+    if [ "$(id -u)" -ne 0 ]; then
+        return 0
+    fi
+    local candidate=""
+    if [ -n "${PARU_WRAPPER_BUILD_USER:-}" ] && [ "$PARU_WRAPPER_BUILD_USER" != "root" ]; then
+        candidate="$PARU_WRAPPER_BUILD_USER"
+    elif [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        candidate="$SUDO_USER"
+    elif [ -n "${PKEXEC_UID:-}" ]; then
+        candidate=$(getent passwd "$PKEXEC_UID" 2>/dev/null | cut -d: -f1 || true)
+    fi
+    if [ -z "$candidate" ] || [ "$candidate" = "root" ] || ! id -u "$candidate" >/dev/null 2>&1; then
+        candidate=""
+        if command -v loginctl >/dev/null 2>&1; then
+            candidate=$(loginctl list-users --no-legend 2>/dev/null | awk '$1 >= 1000 && $3 == "active" { print $2; exit }' || true)
+            if [ -z "$candidate" ]; then
+                candidate=$(loginctl list-users --no-legend 2>/dev/null | awk '$1 >= 1000 { print $2; exit }' || true)
+            fi
+        fi
+    fi
+    if [ -n "$candidate" ] && [ "$candidate" != "root" ] && id -u "$candidate" >/dev/null 2>&1; then
+        _PW_INVOKING_USER="$candidate"
+        _PW_INVOKING_HOME=$(getent passwd "$candidate" 2>/dev/null | cut -d: -f6 || true)
+    fi
+}
+_resolve_invoking_user
+
+run_as_build_user() {
+    if [ "$(id -u)" -eq 0 ] && [ -n "${_PW_INVOKING_USER:-}" ]; then
+        runuser -u "$_PW_INVOKING_USER" -- env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME "$@"
+    else
+        "$@"
+    fi
+}
+
+run_as_repo_owner() {
+    if [ "$(id -u)" -eq 0 ]; then
+        local owner=""
+        if [ -n "${PARU_WRAPPER_REPO_DB:-}" ] && [ -e "$PARU_WRAPPER_REPO_DB" ]; then
+            owner=$(stat -c '%U' "$PARU_WRAPPER_REPO_DB" 2>/dev/null || true)
+        fi
+        if [ -z "$owner" ] || [ "$owner" = "root" ] || [ "$owner" = "UNKNOWN" ]; then
+            owner="${_PW_INVOKING_USER:-}"
+        fi
+        if [ -n "$owner" ] && [ "$owner" != "root" ] && id -u "$owner" >/dev/null 2>&1; then
+            runuser -u "$owner" -- env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME "$@"
+            return $?
+        fi
+    fi
+    "$@"
+}
+
 # Plugin Hook Dispatcher
 # Plugins are located in:
 #  - User overrides: $XDG_CONFIG_HOME/paru-wrapper/plugins.d or ~/.config/paru-wrapper/plugins.d
@@ -119,6 +175,9 @@ dispatch_plugin_hooks() {
         plugin_dirs+=("${XDG_CONFIG_HOME}/paru-wrapper/plugins.d")
     elif [ -n "${HOME:-}" ] && [ -d "${HOME}/.config/paru-wrapper/plugins.d" ]; then
         plugin_dirs+=("${HOME}/.config/paru-wrapper/plugins.d")
+    fi
+    if [ "$(id -u)" -eq 0 ] && [ -n "${_PW_INVOKING_HOME:-}" ] && [ "$_PW_INVOKING_HOME" != "${HOME:-}" ] && [ -d "${_PW_INVOKING_HOME}/.config/paru-wrapper/plugins.d" ]; then
+        plugin_dirs+=("${_PW_INVOKING_HOME}/.config/paru-wrapper/plugins.d")
     fi
 
     if [ -d "/etc/paru-wrapper/plugins.d" ]; then
@@ -158,11 +217,14 @@ dispatch_plugin_hooks() {
 
 
 declare -gA _aur_pkgs_cache=()
+declare -gA _aur_pkgbase_cache=()
+declare -gA _built_split_files=()
+declare -gA _blocked_pkgbases=()
 
 # Resolves the AUR package metadata in batched chunks.
 #
 # @param $@ - List of package names to query
-# @returns Populates global _aur_pkgs_cache associative array mapping names to versions
+# @returns Populates global _aur_pkgs_cache and _aur_pkgbase_cache associative arrays
 fetch_aur_metadata_batch() {
     local pkgs=("$@")
     local chunk_size=50
@@ -185,9 +247,60 @@ fetch_aur_metadata_batch() {
         # avoiding string comparison overhead in pure bash.
         eval "$(echo "$curl_out" | jq -r '
             .results[]? | select(.Name != null and .Name != "") |
-            "_aur_pkgs_cache[\(.Name | @sh)]=\(.Version | @sh)"
+            "_aur_pkgs_cache[\(.Name | @sh)]=\(.Version | @sh)\n_aur_pkgbase_cache[\(.Name | @sh)]=\((.PackageBase // .Name) | @sh)"
         ' 2>/dev/null)"
     done
+}
+
+# Build and install a cloned AUR package directory, handling split PKGBUILDs safely.
+rebuild_cloned_aur_package() {
+    local pkg_name="$1"
+    local clone_name="$2"
+    local build_dir="$3"
+    shift 3
+    local batch_targets=("$@")
+
+    local pre_pkgfiles=()
+    mapfile -t pre_pkgfiles < <(run_as_build_user env -C "$build_dir" makepkg --packagelist 2>/dev/null || true)
+
+    if [[ "$clone_name" == "$pkg_name" && ${#pre_pkgfiles[@]} -le 1 ]]; then
+        run_with_network_resume run_as_build_user env -C "$build_dir" makepkg -sfi --noconfirm
+        return $?
+    fi
+
+    # Split PKGBUILD: build all subpackages without -i so conflicting sibling
+    # subpackages are not installed, then install only the requested target.
+    run_with_network_resume run_as_build_user env -C "$build_dir" makepkg -sf --noconfirm || return $?
+
+    local built_pkgfiles=()
+    mapfile -t built_pkgfiles < <(run_as_build_user env -C "$build_dir" makepkg --packagelist 2>/dev/null || true)
+
+    local -A requested_set=()
+    local t
+    for t in "${batch_targets[@]}"; do
+        requested_set["${t#*/}"]=1
+    done
+
+    local target_pkg_file="" f sub_pkg
+    for f in "${built_pkgfiles[@]}"; do
+        [[ -f "$f" ]] || continue
+        sub_pkg=$(pacman -Qp "$f" 2>/dev/null | awk '{print $1}' || true)
+        [[ -n "$sub_pkg" ]] || continue
+        _built_split_files["$sub_pkg"]="$f"
+        if [[ "$sub_pkg" == "$pkg_name" ]]; then
+            target_pkg_file="$f"
+        elif [[ -z "${requested_set["$sub_pkg"]:-}" ]]; then
+            rm -f "$f" "${f}.sig" 2>/dev/null || true
+            unset '_built_split_files["$sub_pkg"]'
+        fi
+    done
+
+    if [[ -z "$target_pkg_file" || ! -f "$target_pkg_file" ]]; then
+        msg_warn "Built split package '$clone_name' did not produce a package archive for '$pkg_name'."
+        return 1
+    fi
+
+    sudo pacman -U --noconfirm -- "$target_pkg_file"
 }
 
 # Verify a cloned AUR build directory with verify_pkg before running makepkg
@@ -211,7 +324,13 @@ verify_cloned_aur_dir() {
 }
 
 # Purge corrupted paru clone cache directories (missing/broken .git or unreadable objects)
-PARU_CLONE_DIR="${PARU_CLONE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/paru/clone}"
+if [ -z "${PARU_CLONE_DIR:-}" ]; then
+    if [ "$(id -u)" -eq 0 ] && [ -n "${_PW_INVOKING_HOME:-}" ]; then
+        PARU_CLONE_DIR="${_PW_INVOKING_HOME}/.cache/paru/clone"
+    else
+        PARU_CLONE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/paru/clone"
+    fi
+fi
 
 is_broken_clone() {
     local d="$1"
@@ -325,7 +444,12 @@ wait_for_network() {
 read_makepkg_var() {
     local var_name="$1"
     local conf val
-    for conf in "${HOME:-}/.makepkg.conf" "/etc/makepkg.conf"; do
+    local conf_candidates=("${HOME:-}/.makepkg.conf")
+    if [ "$(id -u)" -eq 0 ] && [ -n "${_PW_INVOKING_HOME:-}" ] && [ "$_PW_INVOKING_HOME" != "${HOME:-}" ]; then
+        conf_candidates+=("${_PW_INVOKING_HOME}/.makepkg.conf")
+    fi
+    conf_candidates+=("/etc/makepkg.conf")
+    for conf in "${conf_candidates[@]}"; do
         [[ -r "$conf" ]] || continue
         val=$(awk -F '=' -v key="$var_name" '
             $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
@@ -513,7 +637,7 @@ _run_resumable() {
 
 # Run paru with auto-retry on corrupted clone cache errors and network interruptions
 run_paru_with_clone_repair() {
-    _run_resumable 1 "${PARU_BIN:-/usr/bin/paru}" "$@"
+    _run_resumable 1 run_as_build_user "${PARU_BIN:-/usr/bin/paru}" "$@"
 }
 
 # Run a download/build command with automatic network-drop wait-and-resume
@@ -645,11 +769,15 @@ if [ -f "$HOME/.config/paru-wrapper/paru-wrapper.conf" ]; then
     source "$HOME/.config/paru-wrapper/paru-wrapper.conf"
 fi
 
+if [ "$(id -u)" -eq 0 ] && [ -n "${_PW_INVOKING_HOME:-}" ] && [ "$_PW_INVOKING_HOME" != "${HOME:-}" ] && [ -f "$_PW_INVOKING_HOME/.config/paru-wrapper/paru-wrapper.conf" ]; then
+    source "$_PW_INVOKING_HOME/.config/paru-wrapper/paru-wrapper.conf"
+fi
+
 # Apply configurable fallbacks (Environment > Config > Defaults)
 PARU_WRAPPER_REPO="${PARU_WRAPPER_REPO:-}"
 PARU_WRAPPER_REPO_DIR="${PARU_WRAPPER_REPO_DIR:-}"
 PARU_WRAPPER_REPO_DB="${PARU_WRAPPER_REPO_DB:-${PARU_WRAPPER_REPO_DIR:+${PARU_WRAPPER_REPO_DIR}/${PARU_WRAPPER_REPO}.db.tar.gz}}"
-PARU_WRAPPER_PROJECTS_DIR="${PARU_WRAPPER_PROJECTS_DIR:-${HOME:-/root}/Projects}"
+PARU_WRAPPER_PROJECTS_DIR="${PARU_WRAPPER_PROJECTS_DIR:-${_PW_INVOKING_HOME:-${HOME:-/root}}/Projects}"
 PARU_WRAPPER_DRY_RUN="${PARU_WRAPPER_DRY_RUN:-false}"
 PARU_WRAPPER_AUTO_UPDATE_INSTALLED="${PARU_WRAPPER_AUTO_UPDATE_INSTALLED:-true}"
 PARU_WRAPPER_CLONE_REPAIR_MAX="${PARU_WRAPPER_CLONE_REPAIR_MAX:-3}"
@@ -876,6 +1004,7 @@ if [ "$is_search_install" = true ]; then
     is_search_install=false
 fi
 
+force_rebuild_failures=()
 if [ "$is_transaction" = true ]; then
     # Detect if we are running in an anneal rebuild session
     is_anneal=false
@@ -900,8 +1029,13 @@ if [ "$is_transaction" = true ]; then
     done
 
     hooks_disabled=false
-    CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/paru-wrapper"
-    mkdir -p "$CACHE_DIR"
+    if [ "$(id -u)" -eq 0 ] && [ -n "${_PW_INVOKING_HOME:-}" ]; then
+        CACHE_DIR="${_PW_INVOKING_HOME}/.cache/paru-wrapper"
+        run_as_build_user mkdir -p "$CACHE_DIR"
+    else
+        CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/paru-wrapper"
+        mkdir -p "$CACHE_DIR"
+    fi
 
     if [ "$is_anneal" = true ] || [ "${FORCE_REBUILD:-0}" = "1" ]; then
         # Disable selected hooks to prevent snapper/completion/rebuild-check spam during intermediate package installations
@@ -956,7 +1090,7 @@ if [ "$is_transaction" = true ]; then
                     msg_info "DRY RUN: would run: repo-add ${repo_sign_flags[*]} -R -w \"${PARU_WRAPPER_REPO_DB}\" \"${new_pkgs[*]}\""
                 else
                     if ensure_repo_lock_clear "$PARU_WRAPPER_REPO_DB"; then
-                        repo-add "${repo_sign_flags[@]}" -R -w "$PARU_WRAPPER_REPO_DB" "${new_pkgs[@]}" || msg_warn "Failed to update repository database"
+                        run_as_repo_owner repo-add "${repo_sign_flags[@]}" -R -w "$PARU_WRAPPER_REPO_DB" "${new_pkgs[@]}" || msg_warn "Failed to update repository database"
                         msg_info "$PARU_WRAPPER_REPO repository database updated successfully."
                     else
                         msg_warn "Skipping repository database update because lockfile could not be acquired."
@@ -1005,18 +1139,20 @@ if [ "$is_transaction" = true ]; then
     # If --rebuild or --redownload is requested, purge stale prebuilt binaries from local repo
     if [ "$is_rebuild_cmd" = true ] && [ ${#targets[@]} -gt 0 ]; then
         export FORCE_REBUILD=1
-        REPO_DIR=$(dirname "$PARU_WRAPPER_REPO_DB")
-        for pkg in "${targets[@]}"; do
-            pkg_name="${pkg#*/}"
-            echo "[paru-wrapper] Rebuild requested for '$pkg'. Purging stale binaries from $PARU_WRAPPER_REPO..." >&2
-            rm -f "$REPO_DIR/$pkg_name-"*.pkg.tar.zst "$REPO_DIR/$pkg_name-"*.pkg.tar.zst.sig 2>/dev/null || true
-            if ensure_repo_lock_clear "$PARU_WRAPPER_REPO_DB"; then
-                repo_sign_flags=()
-                get_repo_sign_flags repo_sign_flags
-                repo-remove "${repo_sign_flags[@]}" -w "$PARU_WRAPPER_REPO_DB" "$pkg_name" 2>/dev/null || true
-            fi
-        done
-        sudo pacman -Sy >/dev/null 2>&1 || true
+        if [ -n "${PARU_WRAPPER_REPO_DB:-}" ]; then
+            REPO_DIR=$(dirname "$PARU_WRAPPER_REPO_DB")
+            for pkg in "${targets[@]}"; do
+                pkg_name="${pkg#*/}"
+                echo "[paru-wrapper] Rebuild requested for '$pkg'. Purging stale binaries from $PARU_WRAPPER_REPO..." >&2
+                rm -f "$REPO_DIR/$pkg_name-"*.pkg.tar.zst "$REPO_DIR/$pkg_name-"*.pkg.tar.zst.sig 2>/dev/null || true
+                if ensure_repo_lock_clear "$PARU_WRAPPER_REPO_DB"; then
+                    repo_sign_flags=()
+                    get_repo_sign_flags repo_sign_flags
+                    run_as_repo_owner repo-remove "${repo_sign_flags[@]}" -w "$PARU_WRAPPER_REPO_DB" "$pkg_name" >/dev/null 2>&1 || true
+                fi
+            done
+            sudo pacman -Sy >/dev/null 2>&1 || true
+        fi
     fi
 
     # Pre-cache official status for all target packages using a single pacman invocation
@@ -1060,6 +1196,7 @@ if [ "$is_transaction" = true ]; then
 
     # Filter targets and rebuild local packages
     filtered_targets=()
+    force_rebuild_failures=()
     for pkg in "${targets[@]}"; do
         if is_official_pkg "$pkg"; then
             filtered_targets+=("$pkg")
@@ -1085,8 +1222,11 @@ if [ "$is_transaction" = true ]; then
                     if [ "$DRY_RUN" = true ]; then
                         msg_info "DRY RUN: would run: (cd \"${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}\" && makepkg -sfi --noconfirm)"
                     else
-                        if (cd "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}" && run_with_network_resume makepkg -sfi --noconfirm); then
+                        if run_with_network_resume run_as_build_user env -C "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}" makepkg -sfi --noconfirm; then
                             dispatch_plugin_hooks package-rebuilt "$pkg_name"
+                        else
+                            msg_warn "Failed to rebuild local package '$pkg_name' from ${PARU_WRAPPER_PROJECTS_DIR}."
+                            force_rebuild_failures+=("$pkg_name")
                         fi
                     fi
                 elif [[ "$pkg" == aur/* ]]; then
@@ -1096,22 +1236,50 @@ if [ "$is_transaction" = true ]; then
                 fi
             elif [ "${FORCE_REBUILD:-0}" = "1" ]; then
                 # Force rebuild standard AUR package from source to link against new libraries
-                msg_info "FORCE_REBUILD active. Rebuilding AUR package '$pkg_name' from source..."
+                clone_name="${_aur_pkgbase_cache["$pkg_name"]:-$pkg_name}"
+                msg_info "FORCE_REBUILD active. Rebuilding AUR package '$pkg_name' (base: '$clone_name') from source..."
                 if [ "$DRY_RUN" = true ]; then
-                    msg_info "DRY RUN: would clone and rebuild '$pkg_name' from AUR."
+                    msg_info "DRY RUN: would clone '$clone_name' and rebuild '$pkg_name' from AUR."
                 else
-                    build_dir=$(mktemp -d)
-                    if git clone --depth 1 "https://aur.archlinux.org/$pkg_name.git" "$build_dir" 2>/dev/null; then
-                        if ! verify_cloned_aur_dir "$pkg_name" "$build_dir"; then
-                            rm -rf "$build_dir"
-                            exit 1
-                        fi
-                        if (cd "$build_dir" && run_with_network_resume makepkg -sfi --noconfirm); then
+                    if [[ -n "${_blocked_pkgbases["$clone_name"]:-}" ]]; then
+                        msg_warn "Skipping '$pkg_name' because pkgbase '$clone_name' failed security verification."
+                        force_rebuild_failures+=("$pkg_name")
+                        continue
+                    fi
+                    if [[ -n "${_built_split_files["$pkg_name"]:-}" && -f "${_built_split_files["$pkg_name"]}" ]]; then
+                        msg_info "Installing already-built split subpackage '$pkg_name' from '$clone_name'..."
+                        if sudo pacman -U --noconfirm -- "${_built_split_files["$pkg_name"]}"; then
                             dispatch_plugin_hooks package-rebuilt "$pkg_name"
+                        else
+                            msg_warn "Failed to install split subpackage '$pkg_name'."
+                            force_rebuild_failures+=("$pkg_name")
+                        fi
+                        continue
+                    fi
+                    build_dir=$(run_as_build_user mktemp -d)
+                    if run_as_build_user git clone --depth 1 "https://aur.archlinux.org/$clone_name.git" "$build_dir" 2>/dev/null; then
+                        if [[ ! -f "$build_dir/PKGBUILD" ]]; then
+                            msg_warn "Cloned AUR repository for '$pkg_name' (base: '$clone_name') has no PKGBUILD. Passing to paru."
+                            rm -rf "$build_dir"
+                            filtered_targets+=("$pkg")
+                            continue
+                        fi
+                        if ! verify_cloned_aur_dir "$pkg_name" "$build_dir"; then
+                            msg_warn "Skipping '$pkg_name' due to failed security verification."
+                            _blocked_pkgbases["$clone_name"]=1
+                            rm -rf "$build_dir"
+                            force_rebuild_failures+=("$pkg_name")
+                            continue
+                        fi
+                        if rebuild_cloned_aur_package "$pkg_name" "$clone_name" "$build_dir" "${targets[@]}"; then
+                            dispatch_plugin_hooks package-rebuilt "$pkg_name"
+                        else
+                            msg_warn "Failed to rebuild AUR package '$pkg_name'."
+                            force_rebuild_failures+=("$pkg_name")
                         fi
                         rm -rf "$build_dir"
                     else
-                        msg_warn "Failed to clone '$pkg_name' from AUR. Passing to paru."
+                        msg_warn "Failed to clone '$clone_name' from AUR for '$pkg_name'. Passing to paru."
                         rm -rf "$build_dir"
                         filtered_targets+=("$pkg")
                     fi
@@ -1127,6 +1295,10 @@ if [ "$is_transaction" = true ]; then
     set -- "${other_args[@]}" "${filtered_targets[@]}"
 
     if [ ${#targets[@]} -gt 0 ] && [ ${#filtered_targets[@]} -eq 0 ]; then
+        if [ ${#force_rebuild_failures[@]} -gt 0 ]; then
+            msg_warn "Rebuild completed with failures for: ${force_rebuild_failures[*]}"
+            exit 1
+        fi
         msg_info "All requested targets rebuilt locally. Skipping paru execution."
         exit 0
     fi
@@ -1215,6 +1387,7 @@ purge_broken_clones
 if [ -n "${PARU_WRAPPER_REPO_DB:-}" ] && [ "$DRY_RUN" != true ]; then
     ensure_repo_lock_clear "$PARU_WRAPPER_REPO_DB" || true
 fi
+force_rebuild_failures=()
 if [ "$is_transaction" = true ]; then
     if [ "${FORCE_REBUILD:-0}" = "1" ] || [[ " $* " =~ " --rebuild " ]]; then
         if [ "$DRY_RUN" = true ]; then
@@ -1243,6 +1416,7 @@ else
     fi
 fi
 
+force_rebuild_failures=()
 if [ "$is_transaction" = true ]; then
     # Restore pacman hooks and update database
     if [ "$hooks_disabled" = true ]; then
@@ -1255,6 +1429,11 @@ if [ "$is_transaction" = true ]; then
 
     # Dispatch post-transaction plugin hooks (e.g. filesystem snapshotting)
     dispatch_plugin_hooks post-transaction
+fi
+
+if [ "${exit_code:-0}" -eq 0 ] && [ ${#force_rebuild_failures[@]} -gt 0 ]; then
+    msg_warn "Rebuild completed with failures for: ${force_rebuild_failures[*]}"
+    exit_code=1
 fi
 
 if [ "${exit_code:-0}" -eq 0 ] && [ "$is_transaction" = true ] && [ "${hooks_disabled:-false}" = true ]; then

@@ -15,14 +15,26 @@ plugin_hook() {
     case "$hook_event" in
         deferred-hooks)
             if plugin_check; then
+                if [ "${is_anneal:-false}" = true ]; then
+                    msg_info "[rebuild-check] Skipping deferred check while running inside anneal rebuild."
+                    return 0
+                fi
                 if [ "${DRY_RUN:-false}" = true ]; then
                     msg_info "DRY RUN: [rebuild-check] would analyze packages needing rebuild"
                 else
                     msg_info "[rebuild-check] Checking for packages requiring rebuild..."
-                    if [ "$#" -gt 0 ]; then
-                        printf '%s\n' "$@" | sudo /usr/bin/rebuild-check || true
+                    if [ "$(id -u)" -eq 0 ]; then
+                        if [ "$#" -gt 0 ]; then
+                            printf '%s\n' "$@" | /usr/bin/rebuild-check || true
+                        else
+                            /usr/bin/rebuild-check || true
+                        fi
                     else
-                        sudo /usr/bin/rebuild-check || true
+                        if [ "$#" -gt 0 ]; then
+                            printf '%s\n' "$@" | sudo /usr/bin/rebuild-check || true
+                        else
+                            sudo /usr/bin/rebuild-check || true
+                        fi
                     fi
                 fi
             fi

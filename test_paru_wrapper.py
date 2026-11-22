@@ -786,5 +786,317 @@ class TestParuWrapperRepoSigning(unittest.TestCase):
             self.assertIn(f"repo-remove:-s -k FPR_TEST_KEY -w {db_path} demo", f.read())
 
 
+class TestParuWrapperRebuildResilience(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.home_dir = os.path.join(self.tmpdir.name, "home")
+        self.config_dir = os.path.join(self.tmpdir.name, "xdg_config")
+        self.plugins_dir = os.path.join(self.config_dir, "paru-wrapper", "plugins.d")
+        self.cache_dir = os.path.join(self.tmpdir.name, "cache")
+        self.pkgdest_dir = os.path.join(self.tmpdir.name, "pkgdest")
+        self.bin_dir = os.path.join(self.tmpdir.name, "bin")
+        for d in (
+            self.home_dir,
+            self.plugins_dir,
+            self.cache_dir,
+            self.pkgdest_dir,
+            self.bin_dir,
+        ):
+            os.makedirs(d)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _write_exec(self, name, body):
+        path = os.path.join(self.bin_dir, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+        return path
+
+    def _setup_noop_plugins(self):
+        for pname in (
+            "10-snapper.sh",
+            "20-anneal.sh",
+            "25-projects-pull.sh",
+            "30-rebuild-check.sh",
+            "40-paru-completion.sh",
+            "50-vault-sync.sh",
+        ):
+            with open(os.path.join(self.plugins_dir, pname), "w", encoding="utf-8") as f:
+                f.write("#!/bin/bash\nplugin_hook() { :; }\n")
+
+    def _base_env(self):
+        env = os.environ.copy()
+        env["HOME"] = self.home_dir
+        env["XDG_CONFIG_HOME"] = self.config_dir
+        env["XDG_CACHE_HOME"] = self.cache_dir
+        env["NO_COLOR"] = "1"
+        env["PATH"] = f"{self.bin_dir}:{env.get('PATH', '')}"
+        return env
+
+    def test_fetch_aur_metadata_batch_caches_pkgbase(self):
+        """fetch_aur_metadata_batch stores both Version and PackageBase for split AUR packages."""
+        self._write_exec(
+            "curl",
+            """#!/usr/bin/env bash
+cat << 'JSON'
+{"version":5,"type":"multiinfo","resultcount":1,"results":[{"Name":"caelestia-sddm-locklike-git","PackageBase":"caelestia-sddm-git","Version":"r185.6c8ceff-1"}]}
+JSON
+""",
+        )
+        res = subprocess.run(
+            [
+                "bash",
+                "-c",
+                (
+                    f'source "{PARU_WRAPPER_PATH}"\n'
+                    'fetch_aur_metadata_batch "caelestia-sddm-locklike-git"\n'
+                    'echo "${_aur_pkgs_cache[caelestia-sddm-locklike-git]}|${_aur_pkgbase_cache[caelestia-sddm-locklike-git]}"'
+                ),
+            ],
+            env=self._base_env(),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertEqual(res.stdout.strip(), "r185.6c8ceff-1|caelestia-sddm-git")
+
+    def test_rebuild_skips_repo_remove_when_repo_db_empty(self):
+        """--rebuild without PARU_WRAPPER_REPO_DB must not invoke repo-remove."""
+        self._setup_noop_plugins()
+        trace_file = os.path.join(self.tmpdir.name, "calls.log")
+        self._write_exec(
+            "repo-remove",
+            f'#!/usr/bin/env bash\necho "repo-remove:$*" >> "{trace_file}"\nexit 1\n',
+        )
+        self._write_exec("pacman", "#!/usr/bin/env bash\nexit 0\n")
+        self._write_exec("sudo", "#!/usr/bin/env bash\nexit 0\n")
+        self._write_exec("curl", '#!/usr/bin/env bash\necho \'{"results":[]}\'\n')
+        mock_paru = self._write_exec("mock-paru", "#!/usr/bin/env bash\nexit 0\n")
+
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "--rebuild", "demo"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertFalse(os.path.exists(trace_file))
+        self.assertNotIn("Usage: repo-remove", res.stdout + res.stderr)
+
+    def test_force_rebuild_continues_when_verify_pkg_flags_one_package(self):
+        """Security verification failure skips the flagged package without aborting remaining batch targets."""
+        self._setup_noop_plugins()
+        trace_file = os.path.join(self.tmpdir.name, "rebuild.log")
+        with open(os.path.join(self.plugins_dir, "20-anneal.sh"), "w", encoding="utf-8") as f:
+            f.write(
+                f'#!/bin/bash\nplugin_hook() {{ [ "$1" = "package-rebuilt" ] && echo "rebuilt:$2" >> "{trace_file}"; }}\n'
+            )
+
+        self._write_exec("pacman", "#!/usr/bin/env bash\nexit 0\n")
+        self._write_exec("sudo", "#!/usr/bin/env bash\nexit 0\n")
+        self._write_exec(
+            "curl",
+            """#!/usr/bin/env bash
+cat << 'JSON'
+{"results":[
+  {"Name":"bad-pkg","PackageBase":"bad-pkg","Version":"1.0-1"},
+  {"Name":"good-pkg","PackageBase":"good-pkg","Version":"1.0-1"}
+]}
+JSON
+""",
+        )
+        self._write_exec(
+            "git",
+            f"""#!/usr/bin/env bash
+if [[ "$1" == "clone" ]]; then
+    url="$4"
+    dest="$5"
+    mkdir -p "$dest"
+    pkg=$(basename "$url" .git)
+    printf 'pkgname=%s\\npkgver=1.0\\npkgrel=1\\n' "$pkg" > "$dest/PKGBUILD"
+    echo "clone:$pkg" >> "{trace_file}"
+    exit 0
+fi
+exit 0
+""",
+        )
+        self._write_exec(
+            "verify_pkg",
+            """#!/usr/bin/env bash
+target="${@: -1}"
+if grep -q "pkgname=bad-pkg" "$target/PKGBUILD" 2>/dev/null; then
+    if [[ "${1:-}" == "--json" ]]; then
+        echo '{"danger_score":25,"verdict":"CRITICAL_RISK","findings":[]}'
+        exit 0
+    fi
+    echo "Flagged bad-pkg"
+    exit 2
+fi
+if [[ "${1:-}" == "--json" ]]; then
+    echo '{"danger_score":0,"verdict":"CLEAN","findings":[]}'
+fi
+exit 0
+""",
+        )
+        self._write_exec(
+            "makepkg",
+            f"""#!/usr/bin/env bash
+if [[ "$*" == *"--packagelist"* ]]; then
+    exit 0
+fi
+pkg=$(awk -F= '/^pkgname=/{{print $2}}' PKGBUILD)
+echo "makepkg:$pkg:$*" >> "{trace_file}"
+exit 0
+""",
+        )
+        mock_paru = self._write_exec("mock-paru", "#!/usr/bin/env bash\nexit 0\n")
+
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "--rebuild", "bad-pkg", "good-pkg"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 1, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log = f.read()
+        self.assertIn("clone:bad-pkg", log)
+        self.assertIn("clone:good-pkg", log)
+        self.assertIn("makepkg:good-pkg:-sfi --noconfirm", log)
+        self.assertIn("rebuilt:good-pkg", log)
+        self.assertNotIn("makepkg:bad-pkg", log)
+        self.assertNotIn("rebuilt:bad-pkg", log)
+
+    def test_force_rebuild_clones_package_base_and_installs_only_requested_split_pkg(self):
+        """Split AUR targets clone PackageBase, build without -i, and install only the requested subpackage."""
+        self._setup_noop_plugins()
+        trace_file = os.path.join(self.tmpdir.name, "split.log")
+        lock_pkg = os.path.join(self.pkgdest_dir, "caelestia-sddm-locklike-git-1-1-any.pkg.tar.zst")
+        min_pkg = os.path.join(self.pkgdest_dir, "caelestia-sddm-minimalist-git-1-1-any.pkg.tar.zst")
+
+        self._write_exec(
+            "curl",
+            """#!/usr/bin/env bash
+cat << 'JSON'
+{"results":[
+  {"Name":"caelestia-sddm-locklike-git","PackageBase":"caelestia-sddm-git","Version":"r185-1"}
+]}
+JSON
+""",
+        )
+        self._write_exec(
+            "git",
+            f"""#!/usr/bin/env bash
+if [[ "$1" == "clone" ]]; then
+    url="$4"
+    dest="$5"
+    echo "clone:$url" >> "{trace_file}"
+    if [[ "$url" == *"/caelestia-sddm-git.git" ]]; then
+        mkdir -p "$dest"
+        printf 'pkgbase=caelestia-sddm-git\\npkgname=(caelestia-sddm-locklike-git caelestia-sddm-minimalist-git)\\n' > "$dest/PKGBUILD"
+        exit 0
+    fi
+    exit 1
+fi
+exit 0
+""",
+        )
+        self._write_exec(
+            "verify_pkg",
+            """#!/usr/bin/env bash
+if [[ "${1:-}" == "--json" ]]; then
+    echo '{"danger_score":0,"verdict":"CLEAN","findings":[]}'
+fi
+exit 0
+""",
+        )
+        self._write_exec(
+            "makepkg",
+            f"""#!/usr/bin/env bash
+if [[ "$*" == *"--packagelist"* ]]; then
+    printf '%s\\n%s\\n' "{lock_pkg}" "{min_pkg}"
+    exit 0
+fi
+echo "makepkg:$*" >> "{trace_file}"
+touch "{lock_pkg}" "{min_pkg}"
+exit 0
+""",
+        )
+        self._write_exec(
+            "pacman",
+            f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == "-Qp" ]]; then
+    b=$(basename "$2")
+    if [[ "$b" == caelestia-sddm-locklike-git-* ]]; then
+        echo "caelestia-sddm-locklike-git 1-1"
+    elif [[ "$b" == caelestia-sddm-minimalist-git-* ]]; then
+        echo "caelestia-sddm-minimalist-git 1-1"
+    fi
+    exit 0
+fi
+if [[ "${{1:-}}" == "-U" ]]; then
+    echo "pacman:$*" >> "{trace_file}"
+    exit 0
+fi
+exit 0
+""",
+        )
+        self._write_exec(
+            "sudo",
+            f"""#!/usr/bin/env bash
+echo "sudo:$*" >> "{trace_file}"
+"$@"
+""",
+        )
+        mock_paru = self._write_exec("mock-paru", "#!/usr/bin/env bash\nexit 0\n")
+
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "--rebuild", "caelestia-sddm-locklike-git"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log = f.read()
+        self.assertIn("clone:https://aur.archlinux.org/caelestia-sddm-git.git", log)
+        self.assertIn("makepkg:-sf --noconfirm", log)
+        self.assertNotIn("makepkg:-sfi", log)
+        self.assertIn(f"pacman:-U --noconfirm -- {lock_pkg}", log)
+        self.assertNotIn(min_pkg, log)
+        self.assertTrue(os.path.exists(lock_pkg))
+        self.assertFalse(os.path.exists(min_pkg))
+
+    def test_rebuild_check_plugin_skips_inside_anneal_session(self):
+        """30-rebuild-check.sh skips recursive rebuild-check while inside an anneal session."""
+        plugin_path = os.path.join(REPO_DIR, "default-plugins", "30-rebuild-check.sh")
+        marker = os.path.join(self.tmpdir.name, "rebuild_check_called")
+        self._write_exec(
+            "rebuild-check",
+            f'#!/usr/bin/env bash\ntouch "{marker}"\nexit 0\n',
+        )
+        self._write_exec("sudo", '#!/usr/bin/env bash\n"$@"\n')
+        res = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'msg_info() {{ :; }}\nis_anneal=true\nsource "{plugin_path}"\nplugin_hook deferred-hooks pkg1',
+            ],
+            env=self._base_env(),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertFalse(os.path.exists(marker))
+
+
 if __name__ == "__main__":
     unittest.main()

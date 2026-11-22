@@ -17,7 +17,11 @@ plugin_hook() {
             local pkg="$1"
             if plugin_check; then
                 msg_info "[anneal] Unmarking '$pkg' in rebuild queue..."
-                sudo anneal unmark "$pkg" 2>/dev/null || true
+                if [ "$(id -u)" -eq 0 ]; then
+                    anneal unmark "$pkg" 2>/dev/null || true
+                else
+                    sudo anneal unmark "$pkg" 2>/dev/null || true
+                fi
             fi
             ;;
     esac
