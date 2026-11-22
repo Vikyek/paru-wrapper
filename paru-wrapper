@@ -55,6 +55,7 @@ Environment Variables:
     PARU_WRAPPER_NET_WAIT_TIMEOUT        Seconds to wait for network recovery (default: 1800, 0 disables)
     PARU_WRAPPER_NET_CHECK_URL           URL probed for connectivity recovery (default: https://archlinux.org)
     PARU_WRAPPER_BUILD_USER              Non-root build user when invoked as root (auto-detected)
+    PARU_WRAPPER_SRCDEST                 Override makepkg SRCDEST for stale git clone recovery
     FORCE_REBUILD                        Rebuild package from source (default: 0)
 
 All other arguments and flags are passed directly to upstream paru.
@@ -264,13 +265,13 @@ rebuild_cloned_aur_package() {
     mapfile -t pre_pkgfiles < <(run_as_build_user env -C "$build_dir" makepkg --packagelist 2>/dev/null || true)
 
     if [[ "$clone_name" == "$pkg_name" && ${#pre_pkgfiles[@]} -le 1 ]]; then
-        run_with_network_resume run_as_build_user env -C "$build_dir" makepkg -sfi --noconfirm
+        run_makepkg_with_recovery "$build_dir" -Csfi --noconfirm
         return $?
     fi
 
     # Split PKGBUILD: build all subpackages without -i so conflicting sibling
     # subpackages are not installed, then install only the requested target.
-    run_with_network_resume run_as_build_user env -C "$build_dir" makepkg -sf --noconfirm || return $?
+    run_makepkg_with_recovery "$build_dir" -Csf --noconfirm || return $?
 
     local built_pkgfiles=()
     mapfile -t built_pkgfiles < <(run_as_build_user env -C "$build_dir" makepkg --packagelist 2>/dev/null || true)
@@ -481,6 +482,19 @@ get_makepkg_gpgkey() {
     read_makepkg_var "GPGKEY"
 }
 
+# Resolve SRCDEST from PARU_WRAPPER_SRCDEST, SRCDEST env, or makepkg.conf
+get_makepkg_srcdest() {
+    if [[ -n "${PARU_WRAPPER_SRCDEST:-}" ]]; then
+        printf '%s\n' "$PARU_WRAPPER_SRCDEST"
+        return 0
+    fi
+    if [[ "${SRCDEST+x}" == "x" ]]; then
+        printf '%s\n' "$SRCDEST"
+        return 0
+    fi
+    read_makepkg_var "SRCDEST" || true
+}
+
 # Populate target array with repo-add/repo-remove signing flags (-s and optional -k <key>)
 get_repo_sign_flags() {
     local -n _out_flags="$1"
@@ -518,10 +532,8 @@ collect_part_search_dirs() {
 
     printf '%s\n' "/var/lib/pacman/sync"
 
-    local srcdest="${SRCDEST:-}"
-    if [[ -z "$srcdest" ]]; then
-        srcdest=$(read_makepkg_var "SRCDEST" || true)
-    fi
+    local srcdest
+    srcdest=$(get_makepkg_srcdest)
     if [[ -n "$srcdest" ]]; then
         printf '%s\n' "$srcdest"
     fi
@@ -645,6 +657,138 @@ run_with_network_resume() {
     _run_resumable 0 "$@"
 }
 
+# Extract the conflicting directory from makepkg "<path> is not a clone of <url>" output.
+_extract_not_a_clone_path() {
+    local log_file="$1"
+    [[ -f "$log_file" ]] || return 1
+    local line clean_line path
+    while IFS= read -r line; do
+        clean_line=$(printf '%s' "$line" | sed -E $'s/\x1B(\\[[0-9;?]*[[:alpha:]]|\\([AB012])//g' | tr -d '\r')
+        if [[ "$clean_line" =~ ^([[:space:]]*(==>[[:space:]]*)?ERROR:[[:space:]]*)?(.+)[[:space:]]+is\ not\ a\ clone\ of[[:space:]]+([^[:space:]]+)[[:space:]]*$ ]]; then
+            path="${BASH_REMATCH[3]}"
+            path="${path%"${path##*[![:space:]]}"}"
+            if [[ -n "$path" ]]; then
+                printf '%s\n' "$path"
+                return 0
+            fi
+        fi
+    done < "$log_file"
+    return 1
+}
+
+# Verify that a reported "not a clone of" path is a git repo dir strictly inside SRCDEST (or build_dir when SRCDEST is unset).
+_is_safe_stale_srcdest_clone() {
+    local stale_dir="$1"
+    local build_dir="${2:-}"
+    [[ -n "$stale_dir" && "$stale_dir" == /* && "$stale_dir" != "/" ]] || return 1
+    [[ -d "$stale_dir" && ! -L "$stale_dir" ]] || return 1
+
+    local resolved_stale
+    resolved_stale=$(readlink -f -- "$stale_dir" 2>/dev/null || true)
+    [[ -n "$resolved_stale" && "$resolved_stale" != "/" && -d "$resolved_stale" ]] || return 1
+
+    local srcdest resolved_srcdest="" resolved_build_dir=""
+    srcdest=$(get_makepkg_srcdest)
+    if [[ -n "$srcdest" ]]; then
+        resolved_srcdest=$(readlink -f -- "$srcdest" 2>/dev/null || true)
+        [[ -n "$resolved_srcdest" && "$resolved_stale" == "$resolved_srcdest/"* && "$resolved_stale" != "$resolved_srcdest" ]] || return 1
+    elif [[ -n "$build_dir" ]]; then
+        resolved_build_dir=$(readlink -f -- "$build_dir" 2>/dev/null || true)
+        [[ -n "$resolved_build_dir" && "$resolved_stale" == "$resolved_build_dir/"* && "$resolved_stale" != "$resolved_build_dir" ]] || return 1
+    else
+        return 1
+    fi
+
+    # Match git working repos, bare mirrors, and incomplete/broken bare clones missing config/HEAD
+    [[ -d "$resolved_stale/objects" || -f "$resolved_stale/HEAD" || -d "$resolved_stale/.git" ]] || return 1
+    return 0
+}
+
+_has_cleanbuild_flag() {
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == "--cleanbuild" ]] || [[ "$arg" =~ ^-[a-zA-Z]*C[a-zA-Z]*$ ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Execute makepkg as the build user while streaming stdout/stderr live and capturing combined output.
+_run_makepkg_with_tee() {
+    local log_file="$1"
+    local build_dir="$2"
+    shift 2
+
+    : > "$log_file"
+    local fifo_dir out_fifo err_fifo pid_out pid_err rc=0
+    fifo_dir=$(mktemp -d)
+    out_fifo="$fifo_dir/out.fifo"
+    err_fifo="$fifo_dir/err.fifo"
+    mkfifo "$out_fifo" "$err_fifo"
+
+    tee -a "$log_file" < "$out_fifo" &
+    pid_out=$!
+    tee -a "$log_file" < "$err_fifo" >&2 &
+    pid_err=$!
+
+    run_as_build_user env -C "$build_dir" makepkg "$@" > "$out_fifo" 2> "$err_fifo" || rc=$?
+
+    wait "$pid_out" "$pid_err" 2>/dev/null || true
+    rm -rf "$fifo_dir"
+    return "$rc"
+}
+
+# Run makepkg with live output, stale SRCDEST git clone auto-recovery, and cleanbuild (-C) retry.
+run_makepkg_with_recovery() {
+    local build_dir="$1"
+    shift
+    local makepkg_args=("$@")
+
+    local makepkg_log
+    makepkg_log=$(mktemp)
+
+    local srcdest_retried=0 cleanbuild_retried=0 rc=0
+    while true; do
+        rc=0
+        run_with_network_resume _run_makepkg_with_tee "$makepkg_log" "$build_dir" "${makepkg_args[@]}" || rc=$?
+
+        if [[ $rc -eq 0 || $rc -gt 128 ]]; then
+            rm -f "$makepkg_log"
+            return "$rc"
+        fi
+
+        local stale_dir=""
+        if (( srcdest_retried == 0 )) && stale_dir=$(_extract_not_a_clone_path "$makepkg_log"); then
+            if _is_safe_stale_srcdest_clone "$stale_dir" "$build_dir"; then
+                msg_warn "Detected stale/mismatched SRCDEST git clone '$stale_dir'. Removing and retrying makepkg..."
+                run_as_build_user rm -rf -- "$stale_dir" 2>/dev/null || rm -rf -- "$stale_dir"
+                if [[ ! -e "$stale_dir" ]]; then
+                    srcdest_retried=1
+                    continue
+                fi
+                msg_warn "Failed to remove stale SRCDEST clone '$stale_dir'; aborting retry."
+            else
+                msg_warn "Refusing to auto-remove '$stale_dir' reported by makepkg (not a verified git clone inside SRCDEST)."
+            fi
+        fi
+
+        if (( cleanbuild_retried == 0 )) && ! _has_cleanbuild_flag "${makepkg_args[@]}"; then
+            local clean_log
+            clean_log=$(sed -E $'s/\x1B(\\[[0-9;?]*[[:alpha:]]|\\([AB012])//g' "$makepkg_log" 2>/dev/null || true)
+            if grep -qE 'A failure occurred in (prepare|build)\(\)|locally modified|Reversed \(or previously applied\) patch' <<< "$clean_log"; then
+                msg_warn "makepkg failed in prepare()/build() without cleanbuild. Retrying with -C (--cleanbuild)..."
+                makepkg_args=(-C "${makepkg_args[@]}")
+                cleanbuild_retried=1
+                continue
+            fi
+        fi
+
+        rm -f "$makepkg_log"
+        return "$rc"
+    done
+}
+
 # Check whether a PID belongs to an active repo-add/repo-remove process
 is_live_repo_tool_pid() {
     local pid="$1"
@@ -753,12 +897,12 @@ ensure_repo_lock_clear() {
     done
 }
 
-# Initialize variables to avoid unbound variable errors
-PARU_WRAPPER_REPO=""
-PARU_WRAPPER_REPO_DB=""
-PARU_WRAPPER_PROJECTS_DIR=""
-PARU_WRAPPER_DRY_RUN="false"
-PARU_WRAPPER_AUTO_UPDATE_INSTALLED="true"
+# Initialize variables to avoid unbound variable errors without clobbering env overrides
+: "${PARU_WRAPPER_REPO:=}"
+: "${PARU_WRAPPER_REPO_DB:=}"
+: "${PARU_WRAPPER_PROJECTS_DIR:=}"
+: "${PARU_WRAPPER_DRY_RUN:=false}"
+: "${PARU_WRAPPER_AUTO_UPDATE_INSTALLED:=true}"
 
 # Load configurations
 if [ -f "/etc/paru-wrapper.conf" ]; then
@@ -1218,11 +1362,15 @@ if [ "$is_transaction" = true ]; then
             elif [ "$in_aur" -eq 0 ]; then
                 # Local package not in AUR: rebuild from PROJECTS_DIR if available
                 if [ -d "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}" ] && [ -f "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}/PKGBUILD" ]; then
+                    local_makepkg_flags="-sfi"
+                    if [ "${FORCE_REBUILD:-0}" = "1" ]; then
+                        local_makepkg_flags="-Csfi"
+                    fi
                     msg_info "Rebuilding local package '$pkg_name' from source in ${PARU_WRAPPER_PROJECTS_DIR}..."
                     if [ "$DRY_RUN" = true ]; then
-                        msg_info "DRY RUN: would run: (cd \"${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}\" && makepkg -sfi --noconfirm)"
+                        msg_info "DRY RUN: would run: (cd \"${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}\" && makepkg ${local_makepkg_flags} --noconfirm)"
                     else
-                        if run_with_network_resume run_as_build_user env -C "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}" makepkg -sfi --noconfirm; then
+                        if run_makepkg_with_recovery "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}" "$local_makepkg_flags" --noconfirm; then
                             dispatch_plugin_hooks package-rebuilt "$pkg_name"
                         else
                             msg_warn "Failed to rebuild local package '$pkg_name' from ${PARU_WRAPPER_PROJECTS_DIR}."

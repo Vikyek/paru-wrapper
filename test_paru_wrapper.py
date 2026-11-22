@@ -968,7 +968,7 @@ exit 0
             log = f.read()
         self.assertIn("clone:bad-pkg", log)
         self.assertIn("clone:good-pkg", log)
-        self.assertIn("makepkg:good-pkg:-sfi --noconfirm", log)
+        self.assertIn("makepkg:good-pkg:-Csfi --noconfirm", log)
         self.assertIn("rebuilt:good-pkg", log)
         self.assertNotIn("makepkg:bad-pkg", log)
         self.assertNotIn("rebuilt:bad-pkg", log)
@@ -1068,7 +1068,8 @@ echo "sudo:$*" >> "{trace_file}"
         with open(trace_file, encoding="utf-8") as f:
             log = f.read()
         self.assertIn("clone:https://aur.archlinux.org/caelestia-sddm-git.git", log)
-        self.assertIn("makepkg:-sf --noconfirm", log)
+        self.assertIn("makepkg:-Csf --noconfirm", log)
+        self.assertNotIn("makepkg:-Csfi", log)
         self.assertNotIn("makepkg:-sfi", log)
         self.assertIn(f"pacman:-U --noconfirm -- {lock_pkg}", log)
         self.assertNotIn(min_pkg, log)
@@ -1096,6 +1097,231 @@ echo "sudo:$*" >> "{trace_file}"
         )
         self.assertEqual(res.returncode, 0, msg=res.stderr)
         self.assertFalse(os.path.exists(marker))
+
+    def test_force_rebuild_local_project_uses_cleanbuild_and_prepare_failure_retries_with_cleanbuild(self):
+        """--rebuild passes -Csfi for local projects, and prepare()/build() failure retries once with -C."""
+        self._setup_noop_plugins()
+        projects_dir = os.path.join(self.tmpdir.name, "projects")
+        pkg_dir = os.path.join(projects_dir, "local-aria2-git")
+        os.makedirs(pkg_dir)
+        with open(os.path.join(pkg_dir, "PKGBUILD"), "w", encoding="utf-8") as f:
+            f.write("pkgname=local-aria2-git\npkgver=1.0\npkgrel=1\narch=('any')\n")
+
+        trace_file = os.path.join(self.tmpdir.name, "local_makepkg.log")
+        self._write_exec("pacman", "#!/usr/bin/env bash\nexit 0\n")
+        self._write_exec("sudo", "#!/usr/bin/env bash\nexit 0\n")
+        self._write_exec("curl", '#!/usr/bin/env bash\necho \'{"results":[]}\'\n')
+        self._write_exec(
+            "makepkg",
+            f"""#!/usr/bin/env bash
+echo "makepkg:$*" >> "{trace_file}"
+exit 0
+""",
+        )
+        mock_paru = self._write_exec("mock-paru", "#!/usr/bin/env bash\nexit 0\n")
+
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+        env["PARU_WRAPPER_PROJECTS_DIR"] = projects_dir
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "--rebuild", "local-aria2-git"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            self.assertIn("makepkg:-Csfi --noconfirm", f.read())
+
+        # Now test run_makepkg_with_recovery retrying with -C after a prepare() failure
+        retry_calls = os.path.join(self.tmpdir.name, "retry_calls")
+        self._write_exec(
+            "makepkg",
+            f"""#!/usr/bin/env bash
+count=0
+[[ -f "{retry_calls}" ]] && count=$(cat "{retry_calls}")
+count=$((count + 1))
+echo "$count" > "{retry_calls}"
+echo "makepkg:$*" >> "{trace_file}"
+if [[ $count -eq 1 ]]; then
+    echo "live stdout line"
+    echo "autopoint: File m4/nls.m4 has been locally modified." >&2
+    echo "==> ERROR: A failure occurred in prepare()." >&2
+    exit 4
+fi
+echo "cleanbuild retry ok"
+exit 0
+""",
+        )
+        env["PARU_WRAPPER_NET_CHECK_CMD"] = "true"
+        res2 = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source "{PARU_WRAPPER_PATH}"\nrun_makepkg_with_recovery "{pkg_dir}" -sfi --noconfirm',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res2.returncode, 0, msg=res2.stderr)
+        self.assertIn("live stdout line", res2.stdout)
+        self.assertIn("cleanbuild retry ok", res2.stdout)
+        self.assertIn("Retrying with -C (--cleanbuild)", res2.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+        self.assertIn("makepkg:-sfi --noconfirm", lines)
+        self.assertIn("makepkg:-C -sfi --noconfirm", lines)
+
+    def test_stale_srcdest_clone_auto_recovery_and_retry(self):
+        """makepkg '<srcdest>/pkg is not a clone of <url>' deletes verified SRCDEST dir and retries once."""
+        self._setup_noop_plugins()
+        srcdest_dir = os.path.join(self.tmpdir.name, "srcdest")
+        stale_clone = os.path.join(srcdest_dir, "chromecastize")
+        os.makedirs(os.path.join(stale_clone, "objects"))
+        with open(os.path.join(stale_clone, "FETCH_HEAD"), "w", encoding="utf-8") as f:
+            f.write("")
+
+        trace_file = os.path.join(self.tmpdir.name, "srcdest_trace.log")
+        calls_file = os.path.join(self.tmpdir.name, "srcdest_calls")
+        self._write_exec("pacman", "#!/usr/bin/env bash\nexit 0\n")
+        self._write_exec("sudo", "#!/usr/bin/env bash\nexit 0\n")
+        self._write_exec(
+            "curl",
+            """#!/usr/bin/env bash
+cat << 'JSON'
+{"results":[{"Name":"chromecastize-git","PackageBase":"chromecastize-git","Version":"59.c739cec-1"}]}
+JSON
+""",
+        )
+        self._write_exec(
+            "git",
+            """#!/usr/bin/env bash
+if [[ "$1" == "clone" ]]; then
+    dest="$5"
+    mkdir -p "$dest"
+    printf 'pkgname=chromecastize-git\\npkgver=1\\npkgrel=1\\n' > "$dest/PKGBUILD"
+    exit 0
+fi
+exit 0
+""",
+        )
+        self._write_exec(
+            "verify_pkg",
+            '#!/usr/bin/env bash\n[[ "${1:-}" == "--json" ]] && echo \'{"danger_score":0,"verdict":"CLEAN","findings":[]}\'\nexit 0\n',
+        )
+        self._write_exec(
+            "makepkg",
+            f"""#!/usr/bin/env bash
+if [[ "$*" == *"--packagelist"* ]]; then
+    exit 0
+fi
+count=0
+[[ -f "{calls_file}" ]] && count=$(cat "{calls_file}")
+count=$((count + 1))
+echo "$count" > "{calls_file}"
+echo "makepkg:$count:$*" >> "{trace_file}"
+echo "==> Making package: chromecastize-git"
+if [[ $count -eq 1 ]]; then
+    printf '\\033[1;31m==> ERROR:\\033[0m\\033(B %s is not a clone of https://github.com/bc-petrkotek/chromecastize.git\\n' "{stale_clone}" >&2
+    exit 17
+fi
+echo "==> Finished making: chromecastize-git"
+exit 0
+""",
+        )
+        mock_paru = self._write_exec("mock-paru", "#!/usr/bin/env bash\nexit 0\n")
+
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+        env["PARU_WRAPPER_SRCDEST"] = srcdest_dir
+        env["PARU_WRAPPER_NET_CHECK_CMD"] = "true"
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "--rebuild", "chromecastize-git"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertFalse(os.path.exists(stale_clone))
+        self.assertIn("Detected stale/mismatched SRCDEST git clone", res.stderr)
+        self.assertIn("==> Making package: chromecastize-git", res.stdout)
+        self.assertIn("==> Finished making: chromecastize-git", res.stdout)
+        with open(calls_file, encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), "2")
+        with open(trace_file, encoding="utf-8") as f:
+            log = f.read()
+        self.assertIn("makepkg:1:-Csfi --noconfirm", log)
+        self.assertIn("makepkg:2:-Csfi --noconfirm", log)
+
+    def test_stale_srcdest_recovery_refuses_outside_dir_and_caps_at_one_retry(self):
+        """Safety guards refuse to delete paths outside SRCDEST and stop after one SRCDEST retry."""
+        srcdest_dir = os.path.join(self.tmpdir.name, "srcdest")
+        outside_dir = os.path.join(self.tmpdir.name, "outside-repo")
+        build_dir = os.path.join(self.tmpdir.name, "build-dir")
+        os.makedirs(srcdest_dir)
+        os.makedirs(os.path.join(outside_dir, "objects"))
+        os.makedirs(build_dir)
+
+        calls_file = os.path.join(self.tmpdir.name, "outside_calls")
+        self._write_exec(
+            "makepkg",
+            f"""#!/usr/bin/env bash
+count=0
+[[ -f "{calls_file}" ]] && count=$(cat "{calls_file}")
+echo $((count + 1)) > "{calls_file}"
+echo "==> ERROR: {outside_dir} is not a clone of https://example.com/repo.git" >&2
+exit 17
+""",
+        )
+        env = self._base_env()
+        env["PARU_WRAPPER_SRCDEST"] = srcdest_dir
+        env["PARU_WRAPPER_NET_CHECK_CMD"] = "true"
+
+        res = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source "{PARU_WRAPPER_PATH}"\nrun_makepkg_with_recovery "{build_dir}" -Csfi --noconfirm',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 17)
+        self.assertTrue(os.path.exists(outside_dir), "Must never delete directories outside SRCDEST")
+        self.assertIn("Refusing to auto-remove", res.stderr)
+        with open(calls_file, encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), "1")
+
+        # Now point inside SRCDEST and verify persistent failure stops after 1 retry (2 total attempts)
+        inside_dir = os.path.join(srcdest_dir, "nheko-git")
+        os.makedirs(os.path.join(inside_dir, "objects"))
+        calls_file2 = os.path.join(self.tmpdir.name, "cap_calls")
+        self._write_exec(
+            "makepkg",
+            f"""#!/usr/bin/env bash
+count=0
+[[ -f "{calls_file2}" ]] && count=$(cat "{calls_file2}")
+echo $((count + 1)) > "{calls_file2}"
+mkdir -p "{inside_dir}/objects"
+echo "==> ERROR: {inside_dir} is not a clone of https://example.com/nheko.git" >&2
+exit 17
+""",
+        )
+        res2 = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source "{PARU_WRAPPER_PATH}"\nrun_makepkg_with_recovery "{build_dir}" -Csfi --noconfirm',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res2.returncode, 17)
+        with open(calls_file2, encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), "2")
 
 
 if __name__ == "__main__":
