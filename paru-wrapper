@@ -4,7 +4,7 @@
 # and automatic local repository DB updates.
 #
 # Usage:
-#  /usr/bin/paru-wrapper [--dry-run] <paru args...>
+#  /usr/bin/paru-wrapper [--dry-run] [--low-priority|--no-low-priority] <paru args...>
 #  /usr/bin/paru-wrapper --init-repo <repo_name> <repo_dir> <projects_dir>
 #  /usr/bin/paru-wrapper --connect-repo <repo_name> <repo_dir> <projects_dir>
 
@@ -26,6 +26,8 @@ Usage:
 
 Wrapper Options:
     --gittinator        Scan installed AUR packages and migrate to -git variants
+    --low-priority      Run paru/makepkg builds with low CPU/IO priority (default)
+    --no-low-priority   Disable low-priority CPU/IO throttling for this run
     --init-repo         Initialize an empty custom local pacman repository
     --connect-repo      Connect to an existing custom local pacman repository
     --wrapper-help      Display this paru-wrapper extended help message
@@ -50,6 +52,7 @@ Environment Variables:
     PARU_WRAPPER_REPO_DIR                Directory containing custom repository .db
     PARU_WRAPPER_PROJECTS_DIR            Root path to local package projects (~/Projects)
     PARU_WRAPPER_AUTO_UPDATE_INSTALLED   Auto-upgrade AUR repo and updated Projects packages (default: true)
+    PARU_WRAPPER_LOW_PRIORITY            Run paru/makepkg with low CPU/IO priority (default: true)
     PARU_WRAPPER_DRY_RUN                 Simulate operations without executing (default: false)
     PARU_WRAPPER_NET_RETRY_MAX           Max network-drop / partial-download resume retries (default: 5)
     PARU_WRAPPER_NET_WAIT_TIMEOUT        Seconds to wait for network recovery (default: 1800, 0 disables)
@@ -141,6 +144,47 @@ run_as_build_user() {
         runuser -u "$_PW_INVOKING_USER" -- env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME "$@"
     else
         "$@"
+    fi
+}
+
+_is_low_priority_enabled() {
+    case "${LOW_PRIORITY:-${PARU_WRAPPER_LOW_PRIORITY:-true}}" in
+        true|1|yes|on|TRUE|YES|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+run_low_priority() {
+    if ! _is_low_priority_enabled; then
+        "$@"
+        return $?
+    fi
+
+    local nice_cmd=()
+    if command -v nice >/dev/null 2>&1; then
+        nice_cmd=(nice -n 15)
+    fi
+    if command -v ionice >/dev/null 2>&1; then
+        nice_cmd+=(ionice -c 3)
+    fi
+    if [[ ${#nice_cmd[@]} -gt 0 ]]; then
+        nice_cmd+=(--)
+    fi
+
+    if [[ ${EUID:-$(id -u)} -ne 0 ]] && command -v systemd-run >/dev/null 2>&1 && systemd-run --user --scope -q true >/dev/null 2>&1; then
+        systemd-run --user --scope -q -p CPUWeight=20 -p IOWeight=20 -- "${nice_cmd[@]}" "$@"
+    elif [[ ${#nice_cmd[@]} -gt 0 ]]; then
+        "${nice_cmd[@]}" "$@"
+    else
+        "$@"
+    fi
+}
+
+_run_build_cmd() {
+    if [ "$(id -u)" -eq 0 ] && [ -n "${_PW_INVOKING_USER:-}" ]; then
+        run_low_priority runuser -u "$_PW_INVOKING_USER" -- env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME "$@"
+    else
+        run_low_priority "$@"
     fi
 }
 
@@ -649,7 +693,7 @@ _run_resumable() {
 
 # Run paru with auto-retry on corrupted clone cache errors and network interruptions
 run_paru_with_clone_repair() {
-    _run_resumable 1 run_as_build_user "${PARU_BIN:-/usr/bin/paru}" "$@"
+    _run_resumable 1 _run_build_cmd "${PARU_BIN:-/usr/bin/paru}" "$@"
 }
 
 # Run a download/build command with automatic network-drop wait-and-resume
@@ -732,7 +776,7 @@ _run_makepkg_with_tee() {
     tee -a "$log_file" < "$err_fifo" >&2 &
     pid_err=$!
 
-    run_as_build_user env -C "$build_dir" makepkg "$@" > "$out_fifo" 2> "$err_fifo" || rc=$?
+    _run_build_cmd env -C "$build_dir" makepkg "$@" > "$out_fifo" 2> "$err_fifo" || rc=$?
 
     wait "$pid_out" "$pid_err" 2>/dev/null || true
     rm -rf "$fifo_dir"
@@ -902,6 +946,7 @@ ensure_repo_lock_clear() {
 : "${PARU_WRAPPER_REPO_DB:=}"
 : "${PARU_WRAPPER_PROJECTS_DIR:=}"
 : "${PARU_WRAPPER_DRY_RUN:=false}"
+: "${PARU_WRAPPER_LOW_PRIORITY:=true}"
 : "${PARU_WRAPPER_AUTO_UPDATE_INSTALLED:=true}"
 
 # Load configurations
@@ -923,6 +968,8 @@ PARU_WRAPPER_REPO_DIR="${PARU_WRAPPER_REPO_DIR:-}"
 PARU_WRAPPER_REPO_DB="${PARU_WRAPPER_REPO_DB:-${PARU_WRAPPER_REPO_DIR:+${PARU_WRAPPER_REPO_DIR}/${PARU_WRAPPER_REPO}.db.tar.gz}}"
 PARU_WRAPPER_PROJECTS_DIR="${PARU_WRAPPER_PROJECTS_DIR:-${_PW_INVOKING_HOME:-${HOME:-/root}}/Projects}"
 PARU_WRAPPER_DRY_RUN="${PARU_WRAPPER_DRY_RUN:-false}"
+PARU_WRAPPER_LOW_PRIORITY="${PARU_WRAPPER_LOW_PRIORITY:-true}"
+LOW_PRIORITY="$PARU_WRAPPER_LOW_PRIORITY"
 PARU_WRAPPER_AUTO_UPDATE_INSTALLED="${PARU_WRAPPER_AUTO_UPDATE_INSTALLED:-true}"
 PARU_WRAPPER_CLONE_REPAIR_MAX="${PARU_WRAPPER_CLONE_REPAIR_MAX:-3}"
 PARU_WRAPPER_NET_RETRY_MAX="${PARU_WRAPPER_NET_RETRY_MAX:-5}"
@@ -1019,13 +1066,20 @@ EOF
     exit 0
 fi
 
-# Parse a --dry-run flag (remove it from args passed to paru)
+# Parse wrapper-specific flags (remove them from args passed to paru)
 DRY_RUN="$PARU_WRAPPER_DRY_RUN"
+LOW_PRIORITY="$PARU_WRAPPER_LOW_PRIORITY"
 POSITIONAL_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --dry-run|-n)
             DRY_RUN=true
+            ;;
+        --low-priority)
+            LOW_PRIORITY=true
+            ;;
+        --no-low-priority)
+            LOW_PRIORITY=false
             ;;
         *)
             POSITIONAL_ARGS+=("$arg")

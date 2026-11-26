@@ -170,6 +170,7 @@ paru-wrapper/
 | `PARU_WRAPPER_REPO_DIR` | `""` | Directory containing the custom repository `.db` file. |
 | `PARU_WRAPPER_PROJECTS_DIR` | `~/Projects` | Root path to local development project source checkouts. |
 | `PARU_WRAPPER_AUTO_UPDATE_INSTALLED` | `1` | Automatically upgrades local custom repository packages when a newer AUR version is found and rebuilds/installs updated installed projects in `$PARU_WRAPPER_PROJECTS_DIR`. Set to `0`/`false` to disable. |
+| `PARU_WRAPPER_LOW_PRIORITY` | `true` | Runs `paru` and `makepkg` builds with reduced CPU/I/O priority (`systemd-run --user --scope` with `CPUWeight=20`, `IOWeight=20`, `nice -n 15`, `ionice -c 3`, falling back to `nice`/`ionice`). Override per invocation with `--low-priority` or `--no-low-priority`. |
 | `PARU_WRAPPER_DRY_RUN` | `false` | Simulates actions without making changes to filesystem or databases. |
 | `PARU_WRAPPER_NET_RETRY_MAX` | `5` | Maximum automatic resume retries after mid-download network drops or interrupted `.part` transfers. |
 | `PARU_WRAPPER_NET_WAIT_TIMEOUT` | `1800` | Maximum seconds to wait for network connectivity recovery before aborting (`0` disables waiting). |

@@ -1324,5 +1324,311 @@ exit 17
             self.assertEqual(f.read().strip(), "2")
 
 
+class TestParuWrapperLowPriority(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.home_dir = os.path.join(self.tmpdir.name, "home")
+        self.config_dir = os.path.join(self.tmpdir.name, "xdg_config")
+        self.plugins_dir = os.path.join(self.config_dir, "paru-wrapper", "plugins.d")
+        self.cache_dir = os.path.join(self.tmpdir.name, "cache")
+        self.bin_dir = os.path.join(self.tmpdir.name, "bin")
+        for d in (self.home_dir, self.plugins_dir, self.cache_dir, self.bin_dir):
+            os.makedirs(d, exist_ok=True)
+        for pname in (
+            "10-snapper.sh",
+            "20-anneal.sh",
+            "25-projects-pull.sh",
+            "30-rebuild-check.sh",
+            "40-paru-completion.sh",
+            "50-vault-sync.sh",
+        ):
+            with open(os.path.join(self.plugins_dir, pname), "w", encoding="utf-8") as f:
+                f.write("#!/usr/bin/env bash\nplugin_hook() { :; }\n")
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _write_exec(self, name, body):
+        path = os.path.join(self.bin_dir, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+        return path
+
+    def _base_env(self):
+        env = os.environ.copy()
+        env["HOME"] = self.home_dir
+        env["XDG_CONFIG_HOME"] = self.config_dir
+        env["XDG_CACHE_HOME"] = self.cache_dir
+        env["NO_COLOR"] = "1"
+        env["PARU_CLONE_DIR"] = os.path.join(self.tmpdir.name, "clone")
+        env["PARU_WRAPPER_NET_CHECK_CMD"] = "true"
+        env["PATH"] = f"{self.bin_dir}:{env.get('PATH', '')}"
+        os.makedirs(env["PARU_CLONE_DIR"], exist_ok=True)
+        return env
+
+    def _install_priority_mocks(self, trace_file, systemd_probe_rc=0, include_ionice=True):
+        self._write_exec(
+            "pacman",
+            """#!/usr/bin/env bash
+if [[ "${1:-}" == "-Si" ]]; then
+    printf 'Repository      : extra\\nName            : ripgrep\\n'
+    exit 0
+fi
+exit 0
+""",
+        )
+        self._write_exec("sudo", "#!/usr/bin/env bash\nexit 0\n")
+        self._write_exec("curl", '#!/usr/bin/env bash\necho \'{"results":[]}\'\n')
+        self._write_exec(
+            "systemd-run",
+            f"""#!/usr/bin/env bash
+if [[ "$*" == *"true"* ]]; then
+    exit {systemd_probe_rc}
+fi
+echo "systemd-run:$*" >> "{trace_file}"
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--" ]]; then
+        shift
+        break
+    fi
+    shift
+done
+exec "$@"
+""",
+        )
+        self._write_exec(
+            "nice",
+            f"""#!/usr/bin/env bash
+echo "nice:$*" >> "{trace_file}"
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--" ]]; then
+        shift
+        break
+    fi
+    shift
+done
+exec "$@"
+""",
+        )
+        if include_ionice:
+            self._write_exec(
+                "ionice",
+                f"""#!/usr/bin/env bash
+echo "ionice:$*" >> "{trace_file}"
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--" ]]; then
+        shift
+        break
+    fi
+    shift
+done
+exec "$@"
+""",
+            )
+        return self._write_exec(
+            "mock-paru",
+            f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == "-Quq" ]]; then
+    exit 0
+fi
+echo "paru:$*" >> "{trace_file}"
+exit 0
+""",
+        )
+
+    def test_default_uses_systemd_run_scope_and_strips_no_extra_args(self):
+        """By default PARU_WRAPPER_LOW_PRIORITY wraps paru in systemd-run user scope."""
+        trace_file = os.path.join(self.tmpdir.name, "trace.log")
+        mock_paru = self._install_priority_mocks(trace_file, systemd_probe_rc=0)
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "ripgrep"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log = f.read()
+        self.assertIn("systemd-run:--user --scope -q -p CPUWeight=20 -p IOWeight=20 -- nice -n 15 ionice -c 3 --", log)
+        self.assertIn("paru:--pacman /usr/bin/pacman-wrapper -S ripgrep", log)
+
+    def test_fallback_to_nice_ionice_when_systemd_run_fails(self):
+        """When systemd-run --user --scope probe fails, falls back to nice -n 15 ionice -c 3."""
+        trace_file = os.path.join(self.tmpdir.name, "trace.log")
+        mock_paru = self._install_priority_mocks(trace_file, systemd_probe_rc=1)
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "ripgrep"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log = f.read()
+        self.assertNotIn("systemd-run:", log)
+        self.assertIn("nice:-n 15 ionice -c 3 --", log)
+        self.assertIn("paru:--pacman /usr/bin/pacman-wrapper -S ripgrep", log)
+
+    def test_fallback_to_nice_only_when_ionice_unavailable(self):
+        """When systemd-run fails and ionice is unavailable, falls back to nice -n 15 --."""
+        trace_file = os.path.join(self.tmpdir.name, "trace.log")
+        mock_paru = self._install_priority_mocks(trace_file, systemd_probe_rc=1, include_ionice=False)
+
+        # Build a restricted PATH dir without system ionice so command -v ionice fails
+        restricted_bin = os.path.join(self.tmpdir.name, "restricted_bin")
+        os.makedirs(restricted_bin, exist_ok=True)
+        for tool in os.listdir(self.bin_dir):
+            os.symlink(os.path.join(self.bin_dir, tool), os.path.join(restricted_bin, tool))
+        for sys_tool in ("bash", "env", "mktemp", "rm", "cat", "grep", "awk", "sed", "tr", "find", "stat", "dirname", "basename", "readlink", "mkdir", "touch", "id", "sleep"):
+            for sys_dir in ("/usr/bin", "/bin"):
+                candidate = os.path.join(sys_dir, sys_tool)
+                if os.path.exists(candidate) and not os.path.exists(os.path.join(restricted_bin, sys_tool)):
+                    os.symlink(candidate, os.path.join(restricted_bin, sys_tool))
+                    break
+
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+        env["PATH"] = restricted_bin
+
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "ripgrep"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log = f.read()
+        self.assertNotIn("systemd-run:", log)
+        self.assertNotIn("ionice:", log)
+        self.assertIn("nice:-n 15 --", log)
+        self.assertIn("paru:--pacman /usr/bin/pacman-wrapper -S ripgrep", log)
+
+    def test_no_low_priority_flag_disables_wrapping_and_is_stripped(self):
+        """--no-low-priority runs paru directly without throttling and is stripped from forwarded args."""
+        trace_file = os.path.join(self.tmpdir.name, "trace.log")
+        mock_paru = self._install_priority_mocks(trace_file, systemd_probe_rc=0)
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "--no-low-priority", "-S", "ripgrep"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log = f.read()
+        self.assertNotIn("systemd-run:", log)
+        self.assertNotIn("nice:", log)
+        self.assertNotIn("ionice:", log)
+        self.assertNotIn("--no-low-priority", log)
+        self.assertIn("paru:--pacman /usr/bin/pacman-wrapper -S ripgrep", log)
+
+    def test_env_false_disables_and_low_priority_flag_reenables_and_is_stripped(self):
+        """PARU_WRAPPER_LOW_PRIORITY=false disables wrapping; --low-priority re-enables and is stripped."""
+        trace_file = os.path.join(self.tmpdir.name, "trace.log")
+        mock_paru = self._install_priority_mocks(trace_file, systemd_probe_rc=0)
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+        env["PARU_WRAPPER_LOW_PRIORITY"] = "false"
+
+        res_off = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "ripgrep"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_off.returncode, 0, msg=res_off.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log_off = f.read()
+        self.assertNotIn("systemd-run:", log_off)
+        self.assertNotIn("nice:", log_off)
+        self.assertIn("paru:--pacman /usr/bin/pacman-wrapper -S ripgrep", log_off)
+
+        with open(trace_file, "w", encoding="utf-8") as f:
+            f.write("")
+
+        res_on = subprocess.run(
+            [PARU_WRAPPER_PATH, "--low-priority", "-S", "ripgrep"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_on.returncode, 0, msg=res_on.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log_on = f.read()
+        self.assertIn("systemd-run:--user --scope -q -p CPUWeight=20 -p IOWeight=20 -- nice -n 15 ionice -c 3 --", log_on)
+        self.assertNotIn("--low-priority", log_on)
+        self.assertIn("paru:--pacman /usr/bin/pacman-wrapper -S ripgrep", log_on)
+
+    def test_makepkg_invocation_respects_low_priority_toggle(self):
+        """run_makepkg_with_recovery wraps makepkg by default and skips wrapping when PARU_WRAPPER_LOW_PRIORITY=false."""
+        trace_file = os.path.join(self.tmpdir.name, "makepkg_prio.log")
+        self._install_priority_mocks(trace_file, systemd_probe_rc=0)
+        build_dir = os.path.join(self.tmpdir.name, "build")
+        os.makedirs(build_dir, exist_ok=True)
+        self._write_exec(
+            "makepkg",
+            f'#!/usr/bin/env bash\necho "makepkg:$*" >> "{trace_file}"\nexit 0\n',
+        )
+
+        env = self._base_env()
+        res_on = subprocess.run(
+            ["bash", "-c", f'source "{PARU_WRAPPER_PATH}"\nrun_makepkg_with_recovery "{build_dir}" -Csfi --noconfirm'],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_on.returncode, 0, msg=res_on.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log_on = f.read()
+        self.assertIn("systemd-run:", log_on)
+        self.assertIn("makepkg:-Csfi --noconfirm", log_on)
+
+        with open(trace_file, "w", encoding="utf-8") as f:
+            f.write("")
+        env["PARU_WRAPPER_LOW_PRIORITY"] = "false"
+        res_off = subprocess.run(
+            ["bash", "-c", f'source "{PARU_WRAPPER_PATH}"\nrun_makepkg_with_recovery "{build_dir}" -Csfi --noconfirm'],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_off.returncode, 0, msg=res_off.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log_off = f.read()
+        self.assertNotIn("systemd-run:", log_off)
+        self.assertNotIn("nice:", log_off)
+        self.assertIn("makepkg:-Csfi --noconfirm", log_off)
+
+    def test_dry_run_with_low_priority_flags_strips_flags(self):
+        """--dry-run strips --low-priority and --no-low-priority from reported paru commands."""
+        trace_file = os.path.join(self.tmpdir.name, "dry.log")
+        mock_paru = self._install_priority_mocks(trace_file, systemd_probe_rc=0)
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+
+        for flag in ("--no-low-priority", "--low-priority"):
+            res = subprocess.run(
+                [PARU_WRAPPER_PATH, "--dry-run", flag, "-S", "ripgrep"],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(res.returncode, 0, msg=res.stderr)
+            self.assertIn("DRY RUN: would run: /usr/bin/paru --pacman /usr/bin/pacman-wrapper -S ripgrep", res.stderr)
+            self.assertNotIn(flag, res.stderr)
+        self.assertFalse(os.path.exists(trace_file))
+
+
 if __name__ == "__main__":
     unittest.main()

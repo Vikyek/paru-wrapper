@@ -25,6 +25,12 @@ It automates local custom repository management, performs automated orphan pruni
 .B \-\-gittinator
 Scans installed AUR packages and migrates them to development VCS (\-git) variants where available.
 .TP
+.B \-\-low\-priority
+Runs \fBparu\fR and \fBmakepkg\fR builds with reduced CPU and I/O priority (enabled by default via \fIPARU_WRAPPER_LOW_PRIORITY\fR). Stripped before forwarding arguments to \fBparu\fR.
+.TP
+.B \-\-no\-low\-priority
+Disables low-priority CPU/I/O throttling for the current invocation. Stripped before forwarding arguments to \fBparu\fR.
+.TP
 .B \-\-init\-repo \fIREPO_NAME\fR \fIREPO_DIR\fR \fIPROJECTS_DIR\fR
 Initializes an empty custom local pacman repository database and writes the client configuration to \fI~/.config/paru-wrapper/paru-wrapper.conf\fR.
 .TP
@@ -71,6 +77,9 @@ Background configuration vault synchronization.
 .TP
 .B PARU_WRAPPER_AUTO_UPDATE_INSTALLED
 When enabled (default), automatically upgrades local custom repository packages when a newer version is discovered in the AUR, and rebuilds/installs updated installed projects in \fIPARU_WRAPPER_PROJECTS_DIR\fR.
+.TP
+.B PARU_WRAPPER_LOW_PRIORITY
+When enabled (default: \fItrue\fR), runs \fBparu\fR and \fBmakepkg\fR invocations under a low-priority \fBsystemd-run\fR user scope (\fICPUWeight=20\fR, \fIIOWeight=20\fR) with \fBnice -n 15\fR and \fBionice -c 3\fR, falling back to \fBnice\fR/\fBionice\fR when a user scope is unavailable.
 .TP
 .B PARU_WRAPPER_REPO
 Custom local repository name.
