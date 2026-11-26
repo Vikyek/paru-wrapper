@@ -122,15 +122,41 @@ PYPKG
 
                     if [ "$is_pkg_installed" = true ]; then
                         if command -v verify_pkg >/dev/null 2>&1; then
-                            local verify_json verify_danger=0 verify_verdict="" verify_rc=0
+                            local verify_json verify_danger=0 verify_verdict="" verify_rec="" verify_rc=0
+                            local -a verify_fields=()
                             verify_json=$(verify_pkg --json "$repo" 2>/dev/null) || verify_rc=$?
                             if [ -n "$verify_json" ]; then
-                                verify_danger=$(printf '%s' "$verify_json" | jq -r '.danger_score // 0' 2>/dev/null || echo 0)
-                                verify_verdict=$(printf '%s' "$verify_json" | jq -r '.verdict // ""' 2>/dev/null || echo "")
+                                mapfile -t verify_fields < <(
+                                    printf '%s' "$verify_json" | jq -r '(.danger_score // 0), (.verdict // ""), (.recommended_action // "")' 2>/dev/null || true
+                                )
+                                verify_danger="${verify_fields[0]:-0}"
+                                verify_verdict="${verify_fields[1]:-}"
+                                verify_rec="${verify_fields[2]:-}"
+                                [[ "$verify_danger" =~ ^[0-9]+$ ]] || verify_danger=0
                             fi
-                            if [ "$verify_rc" -ne 0 ] || [ "${verify_danger:-0}" -gt 0 ] || [ "$verify_verdict" = "SUSPICIOUS" ] || [ "$verify_verdict" = "CRITICAL_RISK" ]; then
+                            local verify_allowed=false
+                            if [ "$verify_rc" -eq 0 ] && [ "$verify_verdict" != "SUSPICIOUS" ] && [ "$verify_verdict" != "CRITICAL_RISK" ]; then
+                                if [ "$verify_danger" -eq 0 ] || [ "$verify_verdict" = "SAFE_LOCAL_IDIOM" ] || [ "$verify_rec" = "ACCEPT" ]; then
+                                    verify_allowed=true
+                                fi
+                            fi
+                            if [ "$verify_allowed" = false ] && [ "$verify_rc" -eq 0 ] && [ "$verify_verdict" != "CRITICAL_RISK" ]; then
+                                case "${PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER:-0}" in
+                                    1|true|yes|on|TRUE|YES|ON)
+                                        verify_allowed=true
+                                        msg_warn "[projects-pull] Auto-accepting '${repo_name}' (Verdict: ${verify_verdict:-UNKNOWN}, Danger: ${verify_danger}) via PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER."
+                                        ;;
+                                    [0-9]*)
+                                        if [ "${PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER:-0}" -gt 1 ] 2>/dev/null && [ "$verify_danger" -le "${PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER}" ]; then
+                                            verify_allowed=true
+                                            msg_warn "[projects-pull] Auto-accepting '${repo_name}' (Danger ${verify_danger} <= ${PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER}) via PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER."
+                                        fi
+                                        ;;
+                                esac
+                            fi
+                            if [ "$verify_allowed" = false ]; then
                                 verify_pkg "$repo" >&2 || true
-                                msg_warn "[projects-pull] Security check flagged '${repo_name}' (Danger: ${verify_danger}). Skipping automatic makepkg -sfi --noconfirm."
+                                msg_warn "[projects-pull] Security check flagged '${repo_name}' (Verdict: ${verify_verdict:-UNKNOWN}, Danger: ${verify_danger}). Skipping automatic makepkg -sfi --noconfirm."
                                 msg_warn "[projects-pull] Inspect upstream changes manually: git -C '${repo}' diff ORIG_HEAD..HEAD"
                                 continue
                             fi

@@ -19,7 +19,7 @@ paru-wrapper \- Enhanced paru wrapper with local AUR repository management, modu
 .SH DESCRIPTION
 .B paru-wrapper
 is a wrapper around the \fBparu\fR AUR helper and \fBpacman\fR package manager on Arch Linux.
-It automates local custom repository management, performs automated orphan pruning, accelerates batch queries, provides modular plugin hooks, supports interactive search-and-install (deferring pre-transaction project updates and repository synchronization until packages are selected for installation), and supports migrating packages to bleeding-edge VCS \fB-git\fR variants via \fB\-\-gittinator\fR.
+It automates local custom repository management, performs dependency-aware orphan pruning (preserving toolchains and target \fImakedepends\fR by default), batches \fIFORCE_REBUILD\fR installations into a single \fBpacman \-U\fR transaction while guarding temporarily masked pacman hooks with a PID lockfile, retries transient AUR RPC failures, runs \fBghc-pkg check\fR preflight diagnostics for Haskell packages, falls back to non-\fB-git\fR release packages on broken \fB-git\fR builds (tracked in \fI~/.local/state/paru-wrapper/git-fallbacks.tsv\fR), provides modular plugin hooks, supports interactive search-and-install (deferring pre-transaction project updates and repository synchronization until packages are selected for installation), and supports migrating packages to bleeding-edge VCS \fB-git\fR variants via \fB\-\-gittinator\fR.
 .SH OPTIONS
 .TP
 .B \-\-gittinator
@@ -30,6 +30,15 @@ Runs \fBparu\fR and \fBmakepkg\fR builds with reduced CPU and I/O priority (enab
 .TP
 .B \-\-no\-low\-priority
 Disables low-priority CPU/I/O throttling for the current invocation. Stripped before forwarding arguments to \fBparu\fR.
+.TP
+.B \-\-no\-batch
+Installs each rebuilt \fIFORCE_REBUILD\fR AUR package individually instead of batching all built archives into a single \fBpacman \-U\fR call. Stripped before forwarding arguments to \fBparu\fR.
+.TP
+.B \-\-cleanup\-builddeps
+Allows orphan cleanup to remove build-dependencies and toolchains (e.g. \fBrustup\fR, \fBcmake\fR, \fBmeson\fR, \fBghc\fR). Stripped before forwarding arguments to \fBparu\fR.
+.TP
+.B \-\-no\-cleanup\-builddeps
+Preserves build-dependencies, toolchains, and target \fImakedepends\fR during orphan cleanup (default). Stripped before forwarding arguments to \fBparu\fR.
 .TP
 .B \-\-init\-repo \fIREPO_NAME\fR \fIREPO_DIR\fR \fIPROJECTS_DIR\fR
 Initializes an empty custom local pacman repository database and writes the client configuration to \fI~/.config/paru-wrapper/paru-wrapper.conf\fR.
@@ -80,6 +89,15 @@ When enabled (default), automatically upgrades local custom repository packages 
 .TP
 .B PARU_WRAPPER_LOW_PRIORITY
 When enabled (default: \fItrue\fR), runs \fBparu\fR and \fBmakepkg\fR invocations under a low-priority \fBsystemd-run\fR user scope (\fICPUWeight=20\fR, \fIIOWeight=20\fR) with \fBnice -n 15\fR and \fBionice -c 3\fR, falling back to \fBnice\fR/\fBionice\fR when a user scope is unavailable.
+.TP
+.B PARU_WRAPPER_CLEANUP_BUILDDEPS
+When set to \fI1\fR (or \fItrue\fR), orphan cleanup removes unused build-dependencies and toolchains; default \fI0\fR preserves toolchains and target \fImakedepends\fR.
+.TP
+.B PARU_WRAPPER_BATCH_INSTALL
+When set to \fI1\fR (default), \fIFORCE_REBUILD\fR builds use \fBmakepkg \-Csf\fR and perform one batched \fBpacman \-U\fR install at the end of the build loop (with single-package fallback on failure).
+.TP
+.B PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER
+Controls auto-acceptance of \fBverify_pkg\fR danger scores (default: \fI0\fR, allowing \fICLEAN\fR, \fISAFE_LOCAL_IDIOM\fR, and \fIACCEPT\fR verdicts while blocking \fISUSPICIOUS\fR and \fICRITICAL_RISK\fR). Set to \fI1\fR/\fItrue\fR to auto-accept non-critical warnings, or an integer threshold above 1.
 .TP
 .B PARU_WRAPPER_REPO
 Custom local repository name.

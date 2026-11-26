@@ -1630,5 +1630,760 @@ exit 0
         self.assertFalse(os.path.exists(trace_file))
 
 
+class TestParuWrapperReliabilityAndWorkflow(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.home_dir = os.path.join(self.tmpdir.name, "home")
+        self.config_dir = os.path.join(self.tmpdir.name, "xdg_config")
+        self.plugins_dir = os.path.join(self.config_dir, "paru-wrapper", "plugins.d")
+        self.cache_dir = os.path.join(self.tmpdir.name, "cache")
+        self.state_dir = os.path.join(self.tmpdir.name, "state")
+        self.clone_dir = os.path.join(self.tmpdir.name, "clone")
+        self.pkgdest_dir = os.path.join(self.tmpdir.name, "pkgdest")
+        self.projects_dir = os.path.join(self.tmpdir.name, "projects")
+        self.hooks_dir = os.path.join(self.tmpdir.name, "etc-hooks")
+        self.sys_hooks_dir = os.path.join(self.tmpdir.name, "libalpm-hooks")
+        self.pid_file = os.path.join(self.tmpdir.name, "hooks.pid")
+        self.bin_dir = os.path.join(self.tmpdir.name, "bin")
+        for d in (
+            self.home_dir,
+            self.plugins_dir,
+            self.cache_dir,
+            self.state_dir,
+            self.clone_dir,
+            self.pkgdest_dir,
+            self.projects_dir,
+            self.hooks_dir,
+            self.sys_hooks_dir,
+            self.bin_dir,
+        ):
+            os.makedirs(d, exist_ok=True)
+        for pname in (
+            "10-snapper.sh",
+            "20-anneal.sh",
+            "25-projects-pull.sh",
+            "30-rebuild-check.sh",
+            "40-paru-completion.sh",
+            "50-vault-sync.sh",
+        ):
+            with open(os.path.join(self.plugins_dir, pname), "w", encoding="utf-8") as f:
+                f.write("#!/usr/bin/env bash\nplugin_hook() { :; }\n")
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _write_exec(self, name, body):
+        path = os.path.join(self.bin_dir, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+        return path
+
+    def _base_env(self):
+        env = os.environ.copy()
+        env["HOME"] = self.home_dir
+        env["XDG_CONFIG_HOME"] = self.config_dir
+        env["XDG_CACHE_HOME"] = self.cache_dir
+        env["XDG_STATE_HOME"] = os.path.join(self.home_dir, ".local", "state")
+        env["NO_COLOR"] = "1"
+        env["PARU_CLONE_DIR"] = self.clone_dir
+        env["PARU_WRAPPER_PROJECTS_DIR"] = self.projects_dir
+        env["PARU_WRAPPER_STATE_DIR"] = self.state_dir
+        env["PARU_WRAPPER_HOOKS_DIR"] = self.hooks_dir
+        env["PARU_WRAPPER_SYSTEM_HOOKS_DIR"] = self.sys_hooks_dir
+        env["PARU_WRAPPER_HOOKS_PID_FILE"] = self.pid_file
+        env["PARU_WRAPPER_NET_CHECK_CMD"] = "true"
+        env["PARU_WRAPPER_NET_WAIT_TIMEOUT"] = "2"
+        env["PARU_WRAPPER_NET_POLL_INTERVAL"] = "1"
+        env["PARU_WRAPPER_NET_RETRY_MAX"] = "2"
+        env["PARU_WRAPPER_RETRY_DELAY"] = "0"
+        env["PARU_WRAPPER_LOW_PRIORITY"] = "false"
+        env["PATH"] = f"{self.bin_dir}:{env.get('PATH', '')}"
+        return env
+
+    def test_fetch_aur_metadata_batch_retries_transient_error_and_handles_outage(self):
+        """Transient curl/DNS failure retries via network recovery; permanent outage avoids 'not in AUR' falsehood."""
+        curl_calls = os.path.join(self.tmpdir.name, "curl_calls")
+        self._write_exec(
+            "curl",
+            f"""#!/usr/bin/env bash
+c=0
+[[ -f "{curl_calls}" ]] && c=$(cat "{curl_calls}")
+c=$((c + 1))
+echo "$c" > "{curl_calls}"
+if [[ $c -eq 1 ]]; then
+    exit 6
+fi
+echo '{{"version":5,"type":"multiinfo","results":[{{"Name":"demo-aur","PackageBase":"demo-aur","Version":"2.0-1","MakeDepends":["scdoc>=1.0"]}}]}}'
+""",
+        )
+        env = self._base_env()
+        res = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source "{PARU_WRAPPER_PATH}"\nfetch_aur_metadata_batch "demo-aur"\necho "${{_aur_rpc_failed}}|${{_aur_pkgs_cache[demo-aur]}}|${{_aur_makedepends_cache[demo-aur]}}"',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertEqual(res.stdout.strip(), "0|2.0-1|scdoc")
+
+        # Now make curl fail permanently and ensure paru-wrapper -S does not claim "not in the AUR"
+        trace_file = os.path.join(self.tmpdir.name, "paru_trace.log")
+        self._write_exec("curl", "#!/usr/bin/env bash\nexit 6\n")
+        self._write_exec("pacman", "#!/usr/bin/env bash\nexit 0\n")
+        self._write_exec("sudo", "#!/usr/bin/env bash\nexit 0\n")
+        mock_paru = self._write_exec(
+            "mock-paru",
+            f'#!/usr/bin/env bash\necho "paru:$*" >> "{trace_file}"\nexit 0\n',
+        )
+        env["PARU_BIN"] = mock_paru
+        res2 = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "aur-only-pkg"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res2.returncode, 0, msg=res2.stderr)
+        self.assertNotIn("is not in the AUR", res2.stderr)
+        self.assertIn("AUR RPC lookup failed", res2.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            self.assertIn("paru:--pacman /usr/bin/pacman-wrapper -S aur-only-pkg", f.read())
+
+    def test_verify_pkg_allows_safe_local_idiom_and_respects_auto_accept(self):
+        """SAFE_LOCAL_IDIOM / ACCEPT verdicts pass; SUSPICIOUS respects PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER."""
+        build_dir = os.path.join(self.tmpdir.name, "pkgdir")
+        os.makedirs(build_dir, exist_ok=True)
+        verdict_file = os.path.join(self.tmpdir.name, "verdict.json")
+        self._write_exec(
+            "verify_pkg",
+            f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == "--json" ]]; then
+    cat "{verdict_file}"
+    exit 0
+fi
+echo "report"
+exit 0
+""",
+        )
+        env = self._base_env()
+
+        # 1. SAFE_LOCAL_IDIOM with Danger: 1 and recommended_action: ACCEPT -> allowed
+        with open(verdict_file, "w", encoding="utf-8") as f:
+            f.write('{"danger_score":1,"verdict":"SAFE_LOCAL_IDIOM","recommended_action":"ACCEPT","findings":[]}')
+        res_idiom = subprocess.run(
+            ["bash", "-c", f'source "{PARU_WRAPPER_PATH}"\nverify_cloned_aur_dir "linux-cachyos-bore" "{build_dir}"'],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_idiom.returncode, 0, msg=res_idiom.stderr)
+
+        # 2. SUSPICIOUS -> blocked when AUTO_ACCEPT_DANGER=0, allowed when =1
+        with open(verdict_file, "w", encoding="utf-8") as f:
+            f.write('{"danger_score":12,"verdict":"SUSPICIOUS","recommended_action":"REVIEW_MANUALLY","findings":[]}')
+        res_susp_block = subprocess.run(
+            ["bash", "-c", f'source "{PARU_WRAPPER_PATH}"\nverify_cloned_aur_dir "weird-pkg" "{build_dir}"'],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(res_susp_block.returncode, 0)
+
+        env_auto = dict(env)
+        env_auto["PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER"] = "1"
+        res_susp_ok = subprocess.run(
+            ["bash", "-c", f'source "{PARU_WRAPPER_PATH}"\nverify_cloned_aur_dir "weird-pkg" "{build_dir}"'],
+            env=env_auto,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_susp_ok.returncode, 0, msg=res_susp_ok.stderr)
+
+        # 3. CRITICAL_RISK -> always blocked even with AUTO_ACCEPT_DANGER=1
+        with open(verdict_file, "w", encoding="utf-8") as f:
+            f.write('{"danger_score":30,"verdict":"CRITICAL_RISK","recommended_action":"REJECT","findings":[]}')
+        res_crit = subprocess.run(
+            ["bash", "-c", f'source "{PARU_WRAPPER_PATH}"\nverify_cloned_aur_dir "evil-pkg" "{build_dir}"'],
+            env=env_auto,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(res_crit.returncode, 0)
+
+        # 4. 25-projects-pull.sh allows SAFE_LOCAL_IDIOM
+        plugin_path = os.path.join(REPO_DIR, "default-plugins", "25-projects-pull.sh")
+        remote_repo = os.path.join(self.tmpdir.name, "remote-bore.git")
+        local_repo = os.path.join(self.projects_dir, "linux-cachyos-bore")
+        makepkg_marker = os.path.join(self.tmpdir.name, "bore_built")
+        subprocess.run(["git", "init", "--bare", remote_repo], check=True, capture_output=True)
+        subprocess.run(["git", "clone", remote_repo, local_repo], check=True, capture_output=True)
+        subprocess.run(["git", "-C", local_repo, "config", "user.email", "t@example.com"], check=True)
+        subprocess.run(["git", "-C", local_repo, "config", "user.name", "Test"], check=True)
+        with open(os.path.join(local_repo, "PKGBUILD"), "w", encoding="utf-8") as f:
+            f.write("pkgname=linux-cachyos-bore\npkgver=1.0\npkgrel=1\narch=('x86_64')\n")
+        subprocess.run(["git", "-C", local_repo, "add", "PKGBUILD"], check=True)
+        subprocess.run(["git", "-C", local_repo, "commit", "-m", "init"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", local_repo, "push", "origin", "HEAD"], check=True, capture_output=True)
+
+        pusher = os.path.join(self.tmpdir.name, "pusher-bore")
+        subprocess.run(["git", "clone", remote_repo, pusher], check=True, capture_output=True)
+        subprocess.run(["git", "-C", pusher, "config", "user.email", "t@example.com"], check=True)
+        subprocess.run(["git", "-C", pusher, "config", "user.name", "Test"], check=True)
+        with open(os.path.join(pusher, "PKGBUILD"), "w", encoding="utf-8") as f:
+            f.write("pkgname=linux-cachyos-bore\npkgver=1.1\npkgrel=1\narch=('x86_64')\n")
+        subprocess.run(["git", "-C", pusher, "add", "PKGBUILD"], check=True)
+        subprocess.run(["git", "-C", pusher, "commit", "-m", "bump"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", pusher, "push", "origin", "HEAD"], check=True, capture_output=True)
+
+        with open(verdict_file, "w", encoding="utf-8") as f:
+            f.write('{"danger_score":1,"verdict":"SAFE_LOCAL_IDIOM","recommended_action":"ACCEPT","findings":[]}')
+        self._write_exec("pacman", '#!/usr/bin/env bash\n[[ "${1:-}" == "-Qq" ]] && exit 0\nexit 1\n')
+        self._write_exec("makepkg", f'#!/usr/bin/env bash\ntouch "{makepkg_marker}"\nexit 0\n')
+        res_plug = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'msg_info() {{ echo "$*" >&2; }}\nmsg_warn() {{ echo "WARN: $*" >&2; }}\nsource "{plugin_path}"\nplugin_hook pre-transaction',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_plug.returncode, 0, msg=res_plug.stderr)
+        self.assertTrue(os.path.exists(makepkg_marker), "25-projects-pull.sh should build SAFE_LOCAL_IDIOM packages!")
+
+    def test_orphan_cleanup_preserves_builddeps_by_default_and_toggles_with_flag(self):
+        """Orphan cleanup preserves rustup/cmake/target makedeps by default and removes them with --cleanup-builddeps."""
+        trace_file = os.path.join(self.tmpdir.name, "orphan_trace.log")
+        self._write_exec(
+            "curl",
+            """#!/usr/bin/env bash
+cat << 'JSON'
+{"results":[{"Name":"target-aur","PackageBase":"target-aur","Version":"1.0-1","MakeDepends":["custom-makedep"]}]}
+JSON
+""",
+        )
+        self._write_exec(
+            "pacman",
+            f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == "-Qtdq" ]]; then
+    printf 'rustup\\ncmake\\nghc\\ncustom-makedep\\ntrue-orphan\\n'
+    exit 0
+fi
+if [[ "${{1:-}}" == "-Rns" ]]; then
+    echo "pacman-Rns:$*" >> "{trace_file}"
+    exit 0
+fi
+exit 0
+""",
+        )
+        self._write_exec("sudo", '#!/usr/bin/env bash\n"$@"\n')
+        mock_paru = self._write_exec(
+            "mock-paru",
+            f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == "-Quq" ]]; then
+    exit 0
+fi
+echo "paru:$*" >> "{trace_file}"
+exit 0
+""",
+        )
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+
+        # Default (PARU_WRAPPER_CLEANUP_BUILDDEPS=0): preserve rustup, cmake, ghc, custom-makedep
+        res_def = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "target-aur"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_def.returncode, 0, msg=res_def.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log_def = f.read()
+        self.assertIn("pacman-Rns:-Rns --noconfirm -- true-orphan", log_def)
+        self.assertNotIn("rustup", log_def)
+        self.assertNotIn("custom-makedep", log_def)
+
+        # --cleanup-builddeps removes all orphans and strips flag before forwarding to paru
+        with open(trace_file, "w", encoding="utf-8") as f:
+            f.write("")
+        res_clean = subprocess.run(
+            [PARU_WRAPPER_PATH, "--cleanup-builddeps", "-S", "target-aur"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_clean.returncode, 0, msg=res_clean.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log_clean = f.read()
+        self.assertIn("pacman-Rns:-Rns --noconfirm -- rustup cmake ghc custom-makedep true-orphan", log_clean)
+        self.assertNotIn("--cleanup-builddeps", log_clean)
+
+        # --no-cleanup-builddeps overrides PARU_WRAPPER_CLEANUP_BUILDDEPS=1
+        with open(trace_file, "w", encoding="utf-8") as f:
+            f.write("")
+        env_on = dict(env)
+        env_on["PARU_WRAPPER_CLEANUP_BUILDDEPS"] = "1"
+        res_override = subprocess.run(
+            [PARU_WRAPPER_PATH, "--no-cleanup-builddeps", "-S", "target-aur"],
+            env=env_on,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_override.returncode, 0, msg=res_override.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log_ovr = f.read()
+        self.assertIn("pacman-Rns:-Rns --noconfirm -- true-orphan", log_ovr)
+        self.assertNotIn("rustup", log_ovr)
+        self.assertNotIn("--no-cleanup-builddeps", log_ovr)
+
+    def test_hook_pid_lock_prevents_mid_transaction_reenable_and_restores_stale(self):
+        """Live owner PID keeps heavy hooks (including fnm-update/list-orphans/postz-grub) masked; dead PID restores."""
+        sys_hooks = (
+            "05-snap-pac-pre.hook",
+            "zz-snap-pac-post.hook",
+            "zz-snap-pac-postz-grub.hook",
+            "paru-completion-update.hook",
+            "rebuild-check.hook",
+            "list-orphans.hook",
+        )
+        for h in sys_hooks:
+            with open(os.path.join(self.sys_hooks_dir, h), "w", encoding="utf-8") as f:
+                f.write("[Trigger]\nTarget = *\n")
+        fnm_hook = os.path.join(self.hooks_dir, "fnm-update.hook")
+        with open(fnm_hook, "w", encoding="utf-8") as f:
+            f.write("[Action]\nDescription = fnm\n")
+
+        self._write_exec("pacman", "#!/usr/bin/env bash\nexit 0\n")
+        self._write_exec("sudo", '#!/usr/bin/env bash\n"$@"\n')
+        mock_paru = self._write_exec("mock-paru", "#!/usr/bin/env bash\nexit 0\n")
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+
+        # Start a live background owner process so its PID stays alive during nested paru-wrapper calls
+        owner_proc = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(lambda: (owner_proc.terminate(), owner_proc.wait()))
+
+        # Disable hooks using _disable_pacman_hooks, then overwrite pid_file with live owner_proc.pid
+        res_dis = subprocess.run(
+            ["bash", "-c", f'source "{PARU_WRAPPER_PATH}"\n_disable_pacman_hooks'],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_dis.returncode, 0, msg=res_dis.stderr)
+        with open(self.pid_file, "w", encoding="utf-8") as f:
+            f.write(f"{owner_proc.pid}\n")
+
+        for h in sys_hooks + ("fnm-update.hook",):
+            p = os.path.join(self.hooks_dir, h)
+            self.assertTrue(os.path.islink(p), f"{h} should be symlinked")
+            self.assertEqual(os.readlink(p), "/dev/null")
+        self.assertTrue(os.path.isfile(f"{fnm_hook}.paru-wrapper-disabled"))
+
+        # Nested invocation (simulating paru-completion-update.service running paru -Pc) must NOT re-enable hooks
+        res_nested = subprocess.run(
+            [PARU_WRAPPER_PATH, "-Pc"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_nested.returncode, 0, msg=res_nested.stderr)
+        for h in sys_hooks + ("fnm-update.hook",):
+            self.assertTrue(os.path.islink(os.path.join(self.hooks_dir, h)))
+
+        # Terminate owner process so PID is dead -> next invocation must restore all hooks including fnm-update.hook
+        owner_proc.terminate()
+        owner_proc.wait()
+        res_stale = subprocess.run(
+            [PARU_WRAPPER_PATH, "-Pc"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_stale.returncode, 0, msg=res_stale.stderr)
+        self.assertIn("Detected stale disabled hooks", res_stale.stderr)
+        for h in sys_hooks:
+            self.assertFalse(os.path.exists(os.path.join(self.hooks_dir, h)))
+        self.assertFalse(os.path.islink(fnm_hook))
+        self.assertTrue(os.path.isfile(fnm_hook))
+        self.assertFalse(os.path.exists(f"{fnm_hook}.paru-wrapper-disabled"))
+        self.assertFalse(os.path.exists(self.pid_file))
+
+    def test_force_rebuild_batches_pacman_u_and_supports_fallback_and_no_batch(self):
+        """FORCE_REBUILD builds with -Csf, skips -debug, runs one batched pacman -U, and falls back / honors --no-batch."""
+        trace_file = os.path.join(self.tmpdir.name, "batch.log")
+        with open(os.path.join(self.plugins_dir, "20-anneal.sh"), "w", encoding="utf-8") as f:
+            f.write(f'#!/bin/bash\nplugin_hook() {{ [ "$1" = "package-rebuilt" ] && echo "rebuilt:$2" >> "{trace_file}"; }}\n')
+
+        pkg_a = os.path.join(self.pkgdest_dir, "pkg-alpha-1.0-1-x86_64.pkg.tar.zst")
+        pkg_a_dbg = os.path.join(self.pkgdest_dir, "pkg-alpha-debug-1.0-1-x86_64.pkg.tar.zst")
+        pkg_b = os.path.join(self.pkgdest_dir, "pkg-beta-1.0-1-x86_64.pkg.tar.zst")
+
+        self._write_exec(
+            "curl",
+            """#!/usr/bin/env bash
+cat << 'JSON'
+{"results":[
+  {"Name":"pkg-alpha","PackageBase":"pkg-alpha","Version":"1.0-1"},
+  {"Name":"pkg-beta","PackageBase":"pkg-beta","Version":"1.0-1"}
+]}
+JSON
+""",
+        )
+        self._write_exec(
+            "git",
+            """#!/usr/bin/env bash
+if [[ "$1" == "clone" ]]; then
+    url="$4"; dest="$5"
+    mkdir -p "$dest"
+    pkg=$(basename "$url" .git)
+    printf 'pkgname=%s\\npkgver=1.0\\npkgrel=1\\n' "$pkg" > "$dest/PKGBUILD"
+fi
+exit 0
+""",
+        )
+        self._write_exec("verify_pkg", '#!/usr/bin/env bash\n[[ "${1:-}" == "--json" ]] && echo \'{"danger_score":0,"verdict":"CLEAN"}\'\nexit 0\n')
+        self._write_exec(
+            "makepkg",
+            f"""#!/usr/bin/env bash
+pkg=$(awk -F= '/^pkgname=/{{print $2}}' PKGBUILD)
+if [[ "$*" == *"--packagelist"* ]]; then
+    if [[ "$pkg" == "pkg-alpha" ]]; then
+        printf '%s\\n%s\\n' "{pkg_a}" "{pkg_a_dbg}"
+    else
+        printf '%s\\n' "{pkg_b}"
+    fi
+    exit 0
+fi
+echo "makepkg:$pkg:$*" >> "{trace_file}"
+if [[ "$pkg" == "pkg-alpha" ]]; then
+    touch "{pkg_a}" "{pkg_a_dbg}"
+else
+    touch "{pkg_b}"
+fi
+exit 0
+""",
+        )
+        fail_batch_flag = os.path.join(self.tmpdir.name, "fail_batch")
+        self._write_exec(
+            "pacman",
+            f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == "-Qp" ]]; then
+    b=$(basename "$2")
+    case "$b" in
+        pkg-alpha-debug-*) echo "pkg-alpha-debug 1.0-1" ;;
+        pkg-alpha-*) echo "pkg-alpha 1.0-1" ;;
+        pkg-beta-*) echo "pkg-beta 1.0-1" ;;
+    esac
+    exit 0
+fi
+if [[ "${{1:-}}" == "-U" ]]; then
+    echo "pacman-U:$*" >> "{trace_file}"
+    if [[ -f "{fail_batch_flag}" && $# -gt 4 ]]; then
+        exit 1
+    fi
+    exit 0
+fi
+exit 0
+""",
+        )
+        self._write_exec("sudo", '#!/usr/bin/env bash\n"$@"\n')
+        mock_paru = self._write_exec("mock-paru", "#!/usr/bin/env bash\nexit 0\n")
+
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "--rebuild", "pkg-alpha", "pkg-beta"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        self.assertIn("makepkg:pkg-alpha:-Csf --noconfirm", lines)
+        self.assertIn("makepkg:pkg-beta:-Csf --noconfirm", lines)
+        u_lines = [ln for ln in lines if ln.startswith("pacman-U:")]
+        self.assertEqual(len(u_lines), 1, msg=lines)
+        self.assertIn(pkg_a, u_lines[0])
+        self.assertIn(pkg_b, u_lines[0])
+        self.assertNotIn(pkg_a_dbg, u_lines[0])
+        self.assertIn("rebuilt:pkg-alpha", lines)
+        self.assertIn("rebuilt:pkg-beta", lines)
+
+        # Test batch failure falls back to per-package pacman -U
+        with open(trace_file, "w", encoding="utf-8") as f:
+            f.write("")
+        with open(fail_batch_flag, "w", encoding="utf-8") as f:
+            f.write("1")
+        res_fb = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "--rebuild", "pkg-alpha", "pkg-beta"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_fb.returncode, 0, msg=res_fb.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            fb_lines = [ln.strip() for ln in f if ln.strip()]
+        fb_u = [ln for ln in fb_lines if ln.startswith("pacman-U:")]
+        self.assertEqual(len(fb_u), 3, msg=fb_lines)
+        self.assertIn("Batched pacman -U failed; falling back to per-package installation", res_fb.stderr)
+
+        # Test --no-batch installs individually and strips flag
+        os.remove(fail_batch_flag)
+        with open(trace_file, "w", encoding="utf-8") as f:
+            f.write("")
+        res_nb = subprocess.run(
+            [PARU_WRAPPER_PATH, "--no-batch", "-S", "--rebuild", "pkg-alpha", "pkg-beta"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_nb.returncode, 0, msg=res_nb.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            nb_lines = [ln.strip() for ln in f if ln.strip()]
+        self.assertIn("makepkg:pkg-beta:-Csfi --noconfirm", nb_lines)
+
+    def test_git_fallback_and_haskell_preflight_plus_retry_on_new_commit(self):
+        """Broken -git build runs Haskell ghc-pkg check, falls back to release pkg, and retries on newer commit."""
+        trace_file = os.path.join(self.tmpdir.name, "git_fb.log")
+        remote_commit_file = os.path.join(self.tmpdir.name, "remote_commit")
+        fail_git_build_file = os.path.join(self.tmpdir.name, "fail_git_build")
+        with open(remote_commit_file, "w", encoding="utf-8") as f:
+            f.write("1111111111111111111111111111111111111111")
+        with open(fail_git_build_file, "w", encoding="utf-8") as f:
+            f.write("1")
+
+        pkg_file = os.path.join(self.pkgdest_dir, "shellcheck-git-1-1-x86_64.pkg.tar.zst")
+        self._write_exec(
+            "curl",
+            """#!/usr/bin/env bash
+cat << 'JSON'
+{"results":[{"Name":"shellcheck-git","PackageBase":"shellcheck-git","Version":"r100-1"}]}
+JSON
+""",
+        )
+        self._write_exec(
+            "git",
+            f"""#!/usr/bin/env bash
+if [[ "$1" == "clone" ]]; then
+    dest="$5"
+    mkdir -p "$dest"
+    cat > "$dest/PKGBUILD" << 'PB'
+pkgname=shellcheck-git
+pkgver=1.0
+pkgrel=1
+makedepends=('ghc' 'cabal-install')
+source=('git+https://example.com/shellcheck.git')
+PB
+    exit 0
+fi
+if [[ "$1" == "ls-remote" ]]; then
+    sha=$(cat "{remote_commit_file}")
+    printf '%s\\tHEAD\\n' "${{sha}}"
+    exit 0
+fi
+exit 0
+""",
+        )
+        self._write_exec("verify_pkg", '#!/usr/bin/env bash\n[[ "${1:-}" == "--json" ]] && echo \'{"danger_score":0,"verdict":"CLEAN"}\'\nexit 0\n')
+        self._write_exec(
+            "ghc-pkg",
+            f"""#!/usr/bin/env bash
+echo "ghc-pkg:$*" >> "{trace_file}"
+echo "broken-haskell-pkg-0.1"
+exit 1
+""",
+        )
+        self._write_exec(
+            "makepkg",
+            f"""#!/usr/bin/env bash
+if [[ "$*" == *"--packagelist"* ]]; then
+    echo "{pkg_file}"
+    exit 0
+fi
+echo "makepkg:$*" >> "{trace_file}"
+if [[ -f "{fail_git_build_file}" ]]; then
+    exit 4
+fi
+touch "{pkg_file}"
+exit 0
+""",
+        )
+        self._write_exec(
+            "pacman",
+            f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == "-Si" && "${{2:-}}" == "shellcheck" ]]; then
+    printf 'Repository      : extra\\nName            : shellcheck\\n'
+    exit 0
+fi
+if [[ "${{1:-}}" == "-Qp" ]]; then
+    echo "shellcheck-git 1-1"
+    exit 0
+fi
+if [[ "${{1:-}}" == "-S" || "${{1:-}}" == "-U" ]]; then
+    echo "pacman:$*" >> "{trace_file}"
+    exit 0
+fi
+exit 0
+""",
+        )
+        self._write_exec("sudo", '#!/usr/bin/env bash\n"$@"\n')
+        mock_paru = self._write_exec(
+            "mock-paru",
+            f'#!/usr/bin/env bash\n[[ "${{1:-}}" == "-Quq" ]] && exit 0\necho "paru:$*" >> "{trace_file}"\nexit 0\n',
+        )
+
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "--rebuild", "shellcheck-git"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertIn("ghc-pkg check --simple-output", res.stderr)
+        self.assertIn("broken-haskell-pkg-0.1", res.stderr)
+        self.assertIn("Fallback: 'shellcheck-git' failed at commit 1111111111111111111111111111111111111111; installing official release package 'shellcheck' instead.", res.stderr)
+
+        tsv_path = os.path.join(self.state_dir, "git-fallbacks.tsv")
+        self.assertTrue(os.path.isfile(tsv_path))
+        with open(tsv_path, encoding="utf-8") as f:
+            row = f.read().strip().split("\t")
+        self.assertEqual(len(row), 4)
+        self.assertEqual(row[:3], ["shellcheck-git", "shellcheck", "1111111111111111111111111111111111111111"])
+
+        # Subsequent -Syu with SAME commit does NOT retry shellcheck-git
+        with open(trace_file, "w", encoding="utf-8") as f:
+            f.write("")
+        res_same = subprocess.run([PARU_WRAPPER_PATH, "-Syu"], env=env, capture_output=True, text=True)
+        self.assertEqual(res_same.returncode, 0, msg=res_same.stderr)
+        self.assertIn("No new commit yet for fallback 'shellcheck-git'", res_same.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            self.assertNotIn("makepkg:", f.read())
+
+        # Subsequent -Syu with NEW commit retries shellcheck-git, succeeds, and clears fallback entry
+        with open(remote_commit_file, "w", encoding="utf-8") as f:
+            f.write("2222222222222222222222222222222222222222")
+        os.remove(fail_git_build_file)
+        with open(trace_file, "w", encoding="utf-8") as f:
+            f.write("")
+        res_retry = subprocess.run([PARU_WRAPPER_PATH, "-Syu"], env=env, capture_output=True, text=True)
+        self.assertEqual(res_retry.returncode, 0, msg=res_retry.stderr)
+        self.assertIn("New commit available for 'shellcheck-git'", res_retry.stderr)
+        self.assertIn("Removing fallback entry", res_retry.stderr)
+        self.assertFalse(os.path.exists(tsv_path))
+        with open(trace_file, encoding="utf-8") as f:
+            log_retry = f.read()
+        self.assertIn("makepkg:-Csf --noconfirm", log_retry)
+        self.assertIn(f"pacman:-U --needed -- {pkg_file}", log_retry)
+
+    def test_git_fallback_to_aur_release_and_no_haskell_warning_for_non_haskell(self):
+        """Non-official -git failure falls back to AUR release pkg; non-Haskell PKGBUILDs skip ghc-pkg check."""
+        trace_file = os.path.join(self.tmpdir.name, "aur_fb.log")
+        rel_pkg_file = os.path.join(self.pkgdest_dir, "custom-tool-1.0-1-x86_64.pkg.tar.zst")
+
+        self._write_exec(
+            "curl",
+            """#!/usr/bin/env bash
+if [[ "$*" == *"custom-tool-git"* ]]; then
+    echo '{"results":[{"Name":"custom-tool-git","PackageBase":"custom-tool-git","Version":"r10-1"}]}'
+else
+    echo '{"results":[{"Name":"custom-tool","PackageBase":"custom-tool","Version":"1.0-1"}]}'
+fi
+""",
+        )
+        self._write_exec(
+            "git",
+            """#!/usr/bin/env bash
+if [[ "$1" == "clone" ]]; then
+    url="$4"; dest="$5"
+    mkdir -p "$dest"
+    pkg=$(basename "$url" .git)
+    if [[ "$pkg" == "custom-tool-git" ]]; then
+        printf 'pkgname=custom-tool-git\\npkgver=1\\npkgrel=1\\nsource=("git+https://example.com/custom-tool.git")\\n' > "$dest/PKGBUILD"
+    else
+        printf 'pkgname=custom-tool\\npkgver=1.0\\npkgrel=1\\n' > "$dest/PKGBUILD"
+    fi
+    exit 0
+fi
+if [[ "$1" == "ls-remote" ]]; then
+    printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\\tHEAD\\n'
+    exit 0
+fi
+exit 0
+""",
+        )
+        self._write_exec("verify_pkg", '#!/usr/bin/env bash\n[[ "${1:-}" == "--json" ]] && echo \'{"danger_score":0,"verdict":"CLEAN"}\'\nexit 0\n')
+        self._write_exec("ghc-pkg", f'#!/usr/bin/env bash\necho "ghc-pkg-called" >> "{trace_file}"\nexit 1\n')
+        self._write_exec(
+            "makepkg",
+            f"""#!/usr/bin/env bash
+pkg=$(awk -F= '/^pkgname=/{{print $2}}' PKGBUILD)
+if [[ "$*" == *"--packagelist"* ]]; then
+    if [[ "$pkg" == "custom-tool" ]]; then
+        echo "{rel_pkg_file}"
+    else
+        echo "{self.pkgdest_dir}/custom-tool-git-1-1-x86_64.pkg.tar.zst"
+    fi
+    exit 0
+fi
+echo "makepkg:$pkg:$*" >> "{trace_file}"
+if [[ "$pkg" == "custom-tool-git" ]]; then
+    exit 4
+fi
+touch "{rel_pkg_file}"
+exit 0
+""",
+        )
+        self._write_exec(
+            "pacman",
+            f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == "-Si" ]]; then
+    exit 1
+fi
+if [[ "${{1:-}}" == "-Qp" ]]; then
+    echo "custom-tool 1.0-1"
+    exit 0
+fi
+if [[ "${{1:-}}" == "-U" ]]; then
+    echo "pacman-U:$*" >> "{trace_file}"
+    exit 0
+fi
+exit 0
+""",
+        )
+        self._write_exec("sudo", '#!/usr/bin/env bash\n"$@"\n')
+        mock_paru = self._write_exec("mock-paru", "#!/usr/bin/env bash\nexit 0\n")
+
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "--rebuild", "custom-tool-git"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertIn("installing AUR release package 'custom-tool' instead", res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log = f.read()
+        self.assertNotIn("ghc-pkg-called", log)
+        self.assertIn("makepkg:custom-tool:-Csf --noconfirm", log)
+        self.assertIn(f"pacman-U:-U --needed -- {rel_pkg_file}", log)
+        tsv_path = os.path.join(self.state_dir, "git-fallbacks.tsv")
+        self.assertTrue(os.path.isfile(tsv_path))
+        with open(tsv_path, encoding="utf-8") as f:
+            row = f.read().strip().split("\t")
+        self.assertEqual(row[:3], ["custom-tool-git", "custom-tool", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"])
+
+
 if __name__ == "__main__":
     unittest.main()

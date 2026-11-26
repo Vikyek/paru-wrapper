@@ -43,7 +43,9 @@ paru-wrapper --wrapper-version
 - **Modular Plugin Hook Architecture (XERJ Corpus Selection):** Extensible, event-driven lifecycle hooks execute custom tasks across transaction stages (`pre-transaction`, `post-transaction`, `package-rebuilt`, `deferred-hooks`, `post-transaction-bg`). Eliminates monolithic scripts with isolated subshell execution and prioritized override tiers.
 - **Gittinator Engine (`paru --gittinator`):** Scans all explicitly installed, non-VCS packages (`pacman -Qqe`), queries the AUR RPC API in optimized chunks of 50 packages, interactively matches `-git` development counterparts, and triggers a full upgrade with `--devel`.
 - **Automated Local AUR Repository Sync (`myrepo`):** Integrates custom local repository management (`update_mkvpkg_aur.py`). Detects when newer upstream AUR versions exist, triggers automated package rebuilds, and prunes superseded non-git packages when `-git` builds take priority.
-- **Dependency-Aware Orphan Pruning:** Automatically tracks dependencies introduced during builds and safely prunes true orphans without removing shared libraries required by freshly compiled packages.
+- **Dependency-Aware Orphan Pruning & Build-Dep Preservation:** Automatically tracks dependencies introduced during builds and safely prunes true orphans without removing shared libraries required by freshly compiled packages, while preserving common toolchains and build-deps (`rustup`, `cmake`, `meson`, `ghc`, etc.) and target `makedepends` by default (override with `--cleanup-builddeps` or `PARU_WRAPPER_CLEANUP_BUILDDEPS=1`).
+- **Batched `FORCE_REBUILD` & PID-Locked Hook Masking:** Compiles `FORCE_REBUILD` AUR targets in one pass and installs them in a single batched `pacman -U` call (falling back per-package on error or with `--no-batch`), while protecting temporary `/dev/null` hook masks (`05-snap-pac-pre.hook`, `zz-snap-pac-post.hook`, `zz-snap-pac-postz-grub.hook`, `paru-completion-update.hook`, `rebuild-check.hook`, `list-orphans.hook`, `fnm-update.hook`) with an owner PID file against mid-transaction deletion.
+- **Resilient AUR Verification, Haskell Preflight & `-git` Fallback:** Retries transient AUR RPC failures without misreporting packages as missing from AUR, respects `SAFE_LOCAL_IDIOM` / `ACCEPT` verdicts in `verify_pkg`, runs `ghc-pkg check --simple-output` diagnostics before Haskell builds, and automatically falls back to non-`-git` release packages on broken `-git` builds (recording state in `~/.local/state/paru-wrapper/git-fallbacks.tsv` and retrying when a newer commit appears).
 - **Transparent Dual Wrapper:** Wraps both `paru` and `pacman` seamlessly. Non-wrapper arguments and subcommands pass directly to upstream binaries (`/usr/bin/paru`, `/usr/bin/pacman`) with zero overhead or impedance mismatch.
 - **Resilient Download Recovery:** Automatically detects mid-download network drops and interrupted partial downloads (`.part`), waits with exponential backoff for connectivity recovery, and re-runs `paru`/`makepkg` so `pacman` and `makepkg` (`curl -C -`) resume seamlessly from `.part` files.
 
@@ -171,6 +173,9 @@ paru-wrapper/
 | `PARU_WRAPPER_PROJECTS_DIR` | `~/Projects` | Root path to local development project source checkouts. |
 | `PARU_WRAPPER_AUTO_UPDATE_INSTALLED` | `1` | Automatically upgrades local custom repository packages when a newer AUR version is found and rebuilds/installs updated installed projects in `$PARU_WRAPPER_PROJECTS_DIR`. Set to `0`/`false` to disable. |
 | `PARU_WRAPPER_LOW_PRIORITY` | `true` | Runs `paru` and `makepkg` builds with reduced CPU/I/O priority (`systemd-run --user --scope` with `CPUWeight=20`, `IOWeight=20`, `nice -n 15`, `ionice -c 3`, falling back to `nice`/`ionice`). Override per invocation with `--low-priority` or `--no-low-priority`. |
+| `PARU_WRAPPER_CLEANUP_BUILDDEPS` | `0` | When `0` (default), orphan cleanup preserves common build-deps/toolchains (such as `rustup`, `cmake`, `meson`, `ninja`, `go`, `ghc`) and `makedepends` of explicit/`FORCE_REBUILD` targets. Set to `1` (or pass `--cleanup-builddeps`) to prune them as orphans. |
+| `PARU_WRAPPER_BATCH_INSTALL` | `1` | When `1` (default), `FORCE_REBUILD` AUR builds run `makepkg -Csf --noconfirm` and install all built packages in one batched `pacman -U` transaction (disable with `--no-batch`). |
+| `PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER` | `0` | When `1`/`true` (or numeric score threshold > 1), auto-accepts non-critical `verify_pkg` warnings; by default (`0`), accepts `CLEAN`, `SAFE_LOCAL_IDIOM`, and `recommended_action: "ACCEPT"` verdicts while blocking `SUSPICIOUS` and `CRITICAL_RISK`. |
 | `PARU_WRAPPER_DRY_RUN` | `false` | Simulates actions without making changes to filesystem or databases. |
 | `PARU_WRAPPER_NET_RETRY_MAX` | `5` | Maximum automatic resume retries after mid-download network drops or interrupted `.part` transfers. |
 | `PARU_WRAPPER_NET_WAIT_TIMEOUT` | `1800` | Maximum seconds to wait for network connectivity recovery before aborting (`0` disables waiting). |
@@ -267,8 +272,14 @@ paru -S package-name
 # Interactive search-and-install (defers project updates & MKVPKG sync until packages are selected)
 paru search-term
 
-# Remove packages with dependency-aware orphan pruning
+# Remove packages with dependency-aware orphan pruning (preserving build-deps by default)
 paru -R package-name
+
+# Full upgrade including build-dep/toolchain orphan cleanup
+paru -Syu --cleanup-builddeps
+
+# Force rebuild without batched pacman -U installation
+paru -S --rebuild --no-batch pkg-a pkg-b
 ```
 
 ---

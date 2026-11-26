@@ -25,13 +25,16 @@ Usage:
     paru-wrapper --wrapper-version
 
 Wrapper Options:
-    --gittinator        Scan installed AUR packages and migrate to -git variants
-    --low-priority      Run paru/makepkg builds with low CPU/IO priority (default)
-    --no-low-priority   Disable low-priority CPU/IO throttling for this run
-    --init-repo         Initialize an empty custom local pacman repository
-    --connect-repo      Connect to an existing custom local pacman repository
-    --wrapper-help      Display this paru-wrapper extended help message
-    --wrapper-version   Display paru-wrapper version string
+    --gittinator            Scan installed AUR packages and migrate to -git variants
+    --low-priority          Run paru/makepkg builds with low CPU/IO priority (default)
+    --no-low-priority       Disable low-priority CPU/IO throttling for this run
+    --no-batch              Install FORCE_REBUILD packages individually instead of batched pacman -U
+    --cleanup-builddeps     Allow orphan cleanup to remove build-deps and toolchains
+    --no-cleanup-builddeps  Preserve build-deps and toolchains during orphan cleanup (default)
+    --init-repo             Initialize an empty custom local pacman repository
+    --connect-repo          Connect to an existing custom local pacman repository
+    --wrapper-help          Display this paru-wrapper extended help message
+    --wrapper-version       Display paru-wrapper version string
 
 Modular Plugins:
     Hook directories:
@@ -48,18 +51,21 @@ Modular Plugins:
       50-vault-sync.sh      Background private config sync pass
 
 Environment Variables:
-    PARU_WRAPPER_REPO                    Custom local repository name (e.g. MKVPKG)
-    PARU_WRAPPER_REPO_DIR                Directory containing custom repository .db
-    PARU_WRAPPER_PROJECTS_DIR            Root path to local package projects (~/Projects)
-    PARU_WRAPPER_AUTO_UPDATE_INSTALLED   Auto-upgrade AUR repo and updated Projects packages (default: true)
-    PARU_WRAPPER_LOW_PRIORITY            Run paru/makepkg with low CPU/IO priority (default: true)
-    PARU_WRAPPER_DRY_RUN                 Simulate operations without executing (default: false)
-    PARU_WRAPPER_NET_RETRY_MAX           Max network-drop / partial-download resume retries (default: 5)
-    PARU_WRAPPER_NET_WAIT_TIMEOUT        Seconds to wait for network recovery (default: 1800, 0 disables)
-    PARU_WRAPPER_NET_CHECK_URL           URL probed for connectivity recovery (default: https://archlinux.org)
-    PARU_WRAPPER_BUILD_USER              Non-root build user when invoked as root (auto-detected)
-    PARU_WRAPPER_SRCDEST                 Override makepkg SRCDEST for stale git clone recovery
-    FORCE_REBUILD                        Rebuild package from source (default: 0)
+    PARU_WRAPPER_REPO                       Custom local repository name (e.g. MYREPO)
+    PARU_WRAPPER_REPO_DIR                   Directory containing custom repository .db
+    PARU_WRAPPER_PROJECTS_DIR               Root path to local package projects (~/Projects)
+    PARU_WRAPPER_AUTO_UPDATE_INSTALLED      Auto-upgrade AUR repo and updated Projects packages (default: true)
+    PARU_WRAPPER_LOW_PRIORITY               Run paru/makepkg with low CPU/IO priority (default: true)
+    PARU_WRAPPER_CLEANUP_BUILDDEPS          Remove build-dep/toolchain orphans when set to 1 (default: 0)
+    PARU_WRAPPER_BATCH_INSTALL              Batch FORCE_REBUILD installs into one pacman -U call (default: 1)
+    PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER Auto-accept non-critical verify_pkg warnings when 1/true (default: 0)
+    PARU_WRAPPER_DRY_RUN                    Simulate operations without executing (default: false)
+    PARU_WRAPPER_NET_RETRY_MAX              Max network-drop / partial-download resume retries (default: 5)
+    PARU_WRAPPER_NET_WAIT_TIMEOUT           Seconds to wait for network recovery (default: 1800, 0 disables)
+    PARU_WRAPPER_NET_CHECK_URL              URL probed for connectivity recovery (default: https://archlinux.org)
+    PARU_WRAPPER_BUILD_USER                 Non-root build user when invoked as root (auto-detected)
+    PARU_WRAPPER_SRCDEST                    Override makepkg SRCDEST for stale git clone recovery
+    FORCE_REBUILD                           Rebuild package from source (default: 0)
 
 All other arguments and flags are passed directly to upstream paru.
 See 'man paru-wrapper' or 'paru --help' for upstream pacman/paru options.
@@ -147,11 +153,23 @@ run_as_build_user() {
     fi
 }
 
-_is_low_priority_enabled() {
-    case "${LOW_PRIORITY:-${PARU_WRAPPER_LOW_PRIORITY:-true}}" in
+_is_truthy() {
+    case "${1:-}" in
         true|1|yes|on|TRUE|YES|ON) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+_is_low_priority_enabled() {
+    _is_truthy "${LOW_PRIORITY:-${PARU_WRAPPER_LOW_PRIORITY:-true}}"
+}
+
+_is_cleanup_builddeps_enabled() {
+    _is_truthy "${CLEANUP_BUILDDEPS:-${PARU_WRAPPER_CLEANUP_BUILDDEPS:-0}}"
+}
+
+_is_batch_install_enabled() {
+    _is_truthy "${BATCH_INSTALL:-${PARU_WRAPPER_BATCH_INSTALL:-1}}"
 }
 
 run_low_priority() {
@@ -263,18 +281,38 @@ dispatch_plugin_hooks() {
 
 declare -gA _aur_pkgs_cache=()
 declare -gA _aur_pkgbase_cache=()
+declare -gA _aur_makedepends_cache=()
+declare -gA _aur_rpc_failed_pkgs=()
+declare -g _aur_rpc_failed=0
 declare -gA _built_split_files=()
 declare -gA _blocked_pkgbases=()
+declare -g _LAST_BUILT_PKG_FILE=""
 
-# Resolves the AUR package metadata in batched chunks.
+# Parse AUR RPC v5 JSON into global metadata caches.
+_parse_aur_rpc_payload() {
+    local payload="$1"
+    jq -e '(.type // "") != "error" and (.results | type == "array")' >/dev/null 2>&1 <<< "$payload" || return 1
+    eval "$(printf '%s' "$payload" | jq -r '
+        .results[]? | select(.Name != null and .Name != "") |
+        "_aur_pkgs_cache[\(.Name | @sh)]=\(.Version | @sh)\n" +
+        "_aur_pkgbase_cache[\(.Name | @sh)]=\((.PackageBase // .Name) | @sh)\n" +
+        "_aur_makedepends_cache[\(.Name | @sh)]=\((((.Depends // []) + (.MakeDepends // []) + (.CheckDepends // [])) | map(sub("[<>=].*$"; "")) | unique | join(" ")) | @sh)"
+    ' 2>/dev/null)"
+}
+
+# Resolves the AUR package metadata in batched chunks with retry and outage tracking.
 #
 # @param $@ - List of package names to query
-# @returns Populates global _aur_pkgs_cache and _aur_pkgbase_cache associative arrays
+# @returns Populates _aur_pkgs_cache, _aur_pkgbase_cache, _aur_makedepends_cache,
+#          and sets _aur_rpc_failed=1 / _aur_rpc_failed_pkgs[pkg]=1 on failure.
 fetch_aur_metadata_batch() {
     local pkgs=("$@")
     local chunk_size=50
-    local i chunk query_args curl_out
+    local i chunk query_args curl_out curl_rc pkg
+    local max_retries="${PARU_WRAPPER_NET_RETRY_MAX:-5}"
+    local retry_delay="${PARU_WRAPPER_RETRY_DELAY:-2}"
 
+    _aur_rpc_failed=0
     [[ ${#pkgs[@]} -eq 0 ]] && return 0
 
     for ((i = 0; i < ${#pkgs[@]}; i += chunk_size)); do
@@ -285,19 +323,52 @@ fetch_aur_metadata_batch() {
             query_args+=(--data-urlencode "arg[]=$pkg")
         done
 
-        curl_out=$(curl -s -f -G "https://aur.archlinux.org/rpc/v5/info" "${query_args[@]}" 2>/dev/null) || continue
+        local attempt=0 chunk_ok=false
+        while true; do
+            curl_out=""
+            curl_rc=0
+            curl_out=$(curl -s -f -G --connect-timeout 10 --max-time 20 "https://aur.archlinux.org/rpc/v5/info" "${query_args[@]}" 2>/dev/null) || curl_rc=$?
 
-        # Performance Optimization: Offload text processing to jq and evaluate once.
-        # This converts the O(N) bash while-read loop over curl output into an O(1) bulk evaluation,
-        # avoiding string comparison overhead in pure bash.
-        eval "$(echo "$curl_out" | jq -r '
-            .results[]? | select(.Name != null and .Name != "") |
-            "_aur_pkgs_cache[\(.Name | @sh)]=\(.Version | @sh)\n_aur_pkgbase_cache[\(.Name | @sh)]=\((.PackageBase // .Name) | @sh)"
-        ' 2>/dev/null)"
+            if [[ $curl_rc -eq 0 ]] && _parse_aur_rpc_payload "$curl_out"; then
+                for pkg in "${chunk[@]}"; do
+                    unset '_aur_rpc_failed_pkgs["$pkg"]'
+                done
+                chunk_ok=true
+                break
+            fi
+
+            if ! is_network_online; then
+                msg_warn "Network connectivity unavailable during AUR RPC query. Waiting for network recovery..."
+                if wait_for_network && (( attempt < max_retries )); then
+                    ((++attempt))
+                    continue
+                fi
+                break
+            fi
+
+            if (( attempt < max_retries )); then
+                ((++attempt))
+                msg_warn "AUR RPC query failed (attempt $attempt/$max_retries). Retrying in ${retry_delay}s..."
+                if [[ "$retry_delay" =~ ^[0-9]+$ && "$retry_delay" -gt 0 ]]; then
+                    sleep "$retry_delay"
+                fi
+                continue
+            fi
+            break
+        done
+
+        if [[ "$chunk_ok" != true ]]; then
+            _aur_rpc_failed=1
+            for pkg in "${chunk[@]}"; do
+                _aur_rpc_failed_pkgs["$pkg"]=1
+            done
+            msg_warn "AUR RPC lookup failed for ${#chunk[@]} package(s) (${chunk[*]}). Network/DNS or RPC error; will not mark packages as missing from AUR."
+        fi
     done
+    return 0
 }
 
-# Build and install a cloned AUR package directory, handling split PKGBUILDs safely.
+# Build (and optionally install) a cloned AUR package directory, handling split PKGBUILDs safely.
 rebuild_cloned_aur_package() {
     local pkg_name="$1"
     local clone_name="$2"
@@ -305,16 +376,24 @@ rebuild_cloned_aur_package() {
     shift 3
     local batch_targets=("$@")
 
+    _LAST_BUILT_PKG_FILE=""
+    _preflight_haskell_check "$pkg_name" "$build_dir"
+
     local pre_pkgfiles=()
     mapfile -t pre_pkgfiles < <(run_as_build_user env -C "$build_dir" makepkg --packagelist 2>/dev/null || true)
 
-    if [[ "$clone_name" == "$pkg_name" && ${#pre_pkgfiles[@]} -le 1 ]]; then
+    local defer_install=false
+    if [[ "${_DEFER_BATCH_INSTALL:-0}" == "1" ]] && _is_batch_install_enabled; then
+        defer_install=true
+    fi
+
+    # Fallback to immediate -Csfi only when not batching, or when a mock makepkg outputs no --packagelist entries.
+    if [[ "$clone_name" == "$pkg_name" && ${#pre_pkgfiles[@]} -le 1 ]] && { [[ "$defer_install" != true ]] || [[ ${#pre_pkgfiles[@]} -eq 0 ]]; }; then
         run_makepkg_with_recovery "$build_dir" -Csfi --noconfirm
         return $?
     fi
 
-    # Split PKGBUILD: build all subpackages without -i so conflicting sibling
-    # subpackages are not installed, then install only the requested target.
+    # Build without -i so split subpackages / -dbg archives do not trigger unwanted installs or per-package hook runs.
     run_makepkg_with_recovery "$build_dir" -Csf --noconfirm || return $?
 
     local built_pkgfiles=()
@@ -331,18 +410,25 @@ rebuild_cloned_aur_package() {
         [[ -f "$f" ]] || continue
         sub_pkg=$(pacman -Qp "$f" 2>/dev/null | awk '{print $1}' || true)
         [[ -n "$sub_pkg" ]] || continue
-        _built_split_files["$sub_pkg"]="$f"
         if [[ "$sub_pkg" == "$pkg_name" ]]; then
+            _built_split_files["$sub_pkg"]="$f"
             target_pkg_file="$f"
-        elif [[ -z "${requested_set["$sub_pkg"]:-}" ]]; then
+        elif [[ -n "${requested_set["$sub_pkg"]:-}" ]]; then
+            _built_split_files["$sub_pkg"]="$f"
+        else
             rm -f "$f" "${f}.sig" 2>/dev/null || true
             unset '_built_split_files["$sub_pkg"]'
         fi
     done
 
     if [[ -z "$target_pkg_file" || ! -f "$target_pkg_file" ]]; then
-        msg_warn "Built split package '$clone_name' did not produce a package archive for '$pkg_name'."
+        msg_warn "Built package '$clone_name' did not produce a package archive for '$pkg_name'."
         return 1
+    fi
+
+    _LAST_BUILT_PKG_FILE="$target_pkg_file"
+    if [[ "$defer_install" == true ]]; then
+        return 0
     fi
 
     sudo pacman -U --noconfirm -- "$target_pkg_file"
@@ -354,18 +440,576 @@ verify_cloned_aur_dir() {
     local build_dir="$2"
     command -v verify_pkg >/dev/null 2>&1 || return 0
 
-    local verify_json verify_danger=0 verify_verdict="" verify_rc=0
+    local verify_json verify_danger=0 verify_verdict="" verify_rec="" verify_rc=0
+    local -a verify_fields=()
     verify_json=$(verify_pkg --json "$build_dir" 2>/dev/null) || verify_rc=$?
     if [[ -n "$verify_json" ]]; then
-        verify_danger=$(printf '%s' "$verify_json" | jq -r '.danger_score // 0' 2>/dev/null || echo 0)
-        verify_verdict=$(printf '%s' "$verify_json" | jq -r '.verdict // ""' 2>/dev/null || echo "")
+        mapfile -t verify_fields < <(
+            printf '%s' "$verify_json" | jq -r '(.danger_score // 0), (.verdict // ""), (.recommended_action // "")' 2>/dev/null || true
+        )
+        verify_danger="${verify_fields[0]:-0}"
+        verify_verdict="${verify_fields[1]:-}"
+        verify_rec="${verify_fields[2]:-}"
+        [[ "$verify_danger" =~ ^[0-9]+$ ]] || verify_danger=0
     fi
-    if [[ "$verify_rc" -ne 0 || "${verify_danger:-0}" -gt 0 || "$verify_verdict" == "SUSPICIOUS" || "$verify_verdict" == "CRITICAL_RISK" ]]; then
+
+    local verify_allowed=false
+    if [[ "$verify_rc" -eq 0 && "$verify_verdict" != "SUSPICIOUS" && "$verify_verdict" != "CRITICAL_RISK" ]]; then
+        if [[ "$verify_danger" -eq 0 || "$verify_verdict" == "SAFE_LOCAL_IDIOM" || "$verify_rec" == "ACCEPT" ]]; then
+            verify_allowed=true
+        fi
+    fi
+
+    if [[ "$verify_allowed" != true && "$verify_rc" -eq 0 && "$verify_verdict" != "CRITICAL_RISK" ]]; then
+        case "${PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER:-0}" in
+            1|true|yes|on|TRUE|YES|ON)
+                verify_allowed=true
+                msg_warn "Auto-accepting '$pkg_name' (Verdict: ${verify_verdict:-UNKNOWN}, Danger: ${verify_danger}) via PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER."
+                ;;
+            [0-9]*)
+                if [[ "${PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER:-0}" -gt 1 ]] 2>/dev/null && [[ "$verify_danger" -le "${PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER}" ]]; then
+                    verify_allowed=true
+                    msg_warn "Auto-accepting '$pkg_name' (Danger ${verify_danger} <= ${PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER}) via PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER."
+                fi
+                ;;
+        esac
+    fi
+
+    if [[ "$verify_allowed" != true ]]; then
         verify_pkg "$build_dir" >&2 || true
         msg_warn "Security verification flagged '$pkg_name' (Verdict: ${verify_verdict:-UNKNOWN}, Danger: ${verify_danger}). Aborting rebuild!"
         return 1
     fi
     return 0
+}
+
+# Safely extract git source URL/ref and dependencies from .SRCINFO or PKGBUILD without executing bash.
+_extract_pkgbuild_info() {
+    local pkg_dir="$1"
+    python3 - "$pkg_dir" << 'PYINFO' 2>/dev/null || true
+import os, re, shlex, sys
+
+pkg_dir = sys.argv[1]
+srcinfo = os.path.join(pkg_dir, ".SRCINFO")
+pkgbuild = os.path.join(pkg_dir, "PKGBUILD")
+
+deps = []
+sources = []
+
+if os.path.isfile(srcinfo):
+    with open(srcinfo, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            s = line.strip()
+            if s.startswith(("depends =", "makedepends =", "checkdepends =")):
+                _, val = s.split("=", 1)
+                dep = re.sub(r"[<>=].*$", "", val.strip())
+                if dep:
+                    deps.append(dep)
+            elif s.startswith("source =") or s.startswith("source_x86_64 ="):
+                _, val = s.split("=", 1)
+                val = val.strip()
+                if val:
+                    sources.append(val)
+
+if (not deps or not sources) and os.path.isfile(pkgbuild):
+    with open(pkgbuild, "r", encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    lines = [ln.split("#", 1)[0] if not ln.lstrip().startswith("#") else "" for ln in text.splitlines()]
+    clean = "\n".join(lines)
+
+    vars_map = {}
+    for var in ("pkgname", "_pkgname", "pkgbase", "url", "_repo"):
+        m_var = re.search(rf'(?m)^\s*{var}\s*=\s*([^\n(]+)', clean)
+        if m_var:
+            vars_map[var] = m_var.group(1).strip().strip("'\"")
+
+    def expand_vars(val):
+        pkgname = vars_map.get("pkgname", "")
+        if pkgname:
+            val = val.replace("${pkgname%-git}", pkgname[:-4] if pkgname.endswith("-git") else pkgname)
+            val = val.replace("${pkgname}", pkgname).replace("$pkgname", pkgname)
+        for k, v in vars_map.items():
+            val = val.replace(f"${{{k}}}", v).replace(f"${k}", v)
+        return val
+
+    def extract_array(key):
+        m_arr = re.search(rf'(?m)^\s*{key}\s*=\s*\((.*?)\)', clean, re.S)
+        if not m_arr:
+            return []
+        raw = m_arr.group(1)
+        try:
+            return shlex.split(raw)
+        except ValueError:
+            return raw.split()
+
+    if not deps:
+        for key in ("depends", "makedepends", "checkdepends"):
+            for item in extract_array(key):
+                d = re.sub(r"[<>=].*$", "", expand_vars(item).strip("'\""))
+                if d and "$" not in d:
+                    deps.append(d)
+
+    if not sources:
+        for key in ("source", "source_x86_64"):
+            for item in extract_array(key):
+                s_val = expand_vars(item).strip("'\"")
+                if s_val:
+                    sources.append(s_val)
+
+git_url = ""
+git_ref = "HEAD"
+for s_item in sources:
+    u = s_item.split("::", 1)[1] if "::" in s_item else s_item
+    if u.startswith("git+") or ".git" in u or u.startswith("git://"):
+        if u.startswith("git+"):
+            u = u[4:]
+        if "#" in u:
+            u, frag = u.split("#", 1)
+            for part in frag.split("&"):
+                if part.startswith("branch="):
+                    git_ref = f"refs/heads/{part[7:]}"
+                elif part.startswith("tag="):
+                    git_ref = f"refs/tags/{part[4:]}"
+        git_url = u
+        break
+
+print(f"GIT_URL={git_url}")
+print(f"GIT_REF={git_ref}")
+print("DEPS=" + " ".join(dict.fromkeys(deps)))
+PYINFO
+}
+
+_is_haskell_pkgbuild() {
+    local build_dir="$1"
+    if [[ -f "$build_dir/Setup.hs" || -f "$build_dir/Setup.lhs" ]]; then
+        return 0
+    fi
+    local info deps dep
+    info=$(_extract_pkgbuild_info "$build_dir")
+    deps=$(awk -F= '/^DEPS=/{sub(/^DEPS=/, ""); print}' <<< "$info")
+    for dep in $deps; do
+        if [[ "$dep" =~ ^(ghc|ghc-.*|haskell-.*|cabal-install|stack)$ ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Warn before building a Haskell AUR package if ghc-pkg reports broken registrations.
+_preflight_haskell_check() {
+    local pkg_name="$1"
+    local build_dir="$2"
+    command -v ghc-pkg >/dev/null 2>&1 || return 0
+    _is_haskell_pkgbuild "$build_dir" || return 0
+
+    local ghc_broken="" ghc_rc=0
+    ghc_broken=$(ghc-pkg check --simple-output 2>&1) || ghc_rc=$?
+    if [[ $ghc_rc -ne 0 || -n "$ghc_broken" ]]; then
+        msg_warn "Haskell preflight ('ghc-pkg check --simple-output') reported broken package(s) before building '$pkg_name': ${ghc_broken:-exit code $ghc_rc}"
+        msg_warn "Continuing build; if compilation fails, rebuild broken Haskell packages or let -git fallback run if available."
+    fi
+    return 0
+}
+
+# Run a command with 'yes' piped without tripping set -o pipefail on SIGPIPE.
+_run_pipe_yes() {
+    local rc=0
+    (
+        set +o pipefail
+        yes | "$@"
+        exit "${PIPESTATUS[1]}"
+    ) || rc=$?
+    return "$rc"
+}
+
+# Check whether a package exists in an official/sync repo (excluding custom PARU_WRAPPER_REPO).
+_is_official_noncustom_pkg() {
+    local pkg="$1"
+    local repo_lines
+    repo_lines=$(LC_ALL=C pacman -Si "$pkg" 2>/dev/null | awk -F '[ \t]*:[ \t]*' '/^Repository/ { print $2 }' || true)
+    [[ -n "$repo_lines" ]] || return 1
+    local r
+    while IFS= read -r r; do
+        [[ -n "$r" && "$r" != "${PARU_WRAPPER_REPO:-}" ]] && return 0
+    done <<< "$repo_lines"
+    return 1
+}
+
+_resolve_git_pkg_commit() {
+    local pkg_name="$1"
+    local pkg_dir="$2"
+    local info git_url git_ref commit=""
+    info=$(_extract_pkgbuild_info "$pkg_dir")
+    git_url=$(awk -F= '/^GIT_URL=/{sub(/^GIT_URL=/, ""); print}' <<< "$info")
+    git_ref=$(awk -F= '/^GIT_REF=/{sub(/^GIT_REF=/, ""); print}' <<< "$info")
+
+    if [[ -n "$git_url" ]]; then
+        commit=$(git ls-remote "$git_url" "${git_ref:-HEAD}" 2>/dev/null | awk 'NR==1 {print $1}' || true)
+    fi
+    if [[ -z "$commit" ]]; then
+        local srcdest repo_base cand
+        srcdest=$(get_makepkg_srcdest 2>/dev/null || true)
+        repo_base="${git_url##*/}"
+        repo_base="${repo_base%.git}"
+        for cand in "$pkg_dir/src/$repo_base" "${srcdest:+$srcdest/$repo_base}" "$pkg_dir"; do
+            if [[ -n "$cand" && -d "$cand" ]] && git -C "$cand" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+                commit=$(git -C "$cand" rev-parse HEAD 2>/dev/null || true)
+                [[ -n "$commit" ]] && break
+            fi
+        done
+    fi
+    if [[ -z "$commit" ]]; then
+        commit="${_aur_pkgs_cache["$pkg_name"]:-unknown}"
+    fi
+    printf '%s\n' "$commit"
+}
+
+_record_git_fallback() {
+    local git_pkg="$1"
+    local release_pkg="$2"
+    local failed_commit="$3"
+    local ts
+    printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1
+
+    run_as_build_user mkdir -p "$STATE_DIR"
+    local tmp_tsv
+    tmp_tsv=$(run_as_build_user mktemp "${STATE_DIR}/git-fallbacks.XXXXXX")
+    if [[ -f "$GIT_FALLBACKS_FILE" ]]; then
+        awk -F '\t' -v target="$git_pkg" '$1 != target && NF >= 3 { print }' "$GIT_FALLBACKS_FILE" > "$tmp_tsv" 2>/dev/null || true
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$git_pkg" "$release_pkg" "$failed_commit" "$ts" >> "$tmp_tsv"
+    run_as_build_user mv -f -T "$tmp_tsv" "$GIT_FALLBACKS_FILE" 2>/dev/null || mv -f -T "$tmp_tsv" "$GIT_FALLBACKS_FILE"
+}
+
+_remove_git_fallback() {
+    local git_pkg="$1"
+    [[ -f "$GIT_FALLBACKS_FILE" ]] || return 0
+    grep -q "^${git_pkg}"$'\t' "$GIT_FALLBACKS_FILE" 2>/dev/null || return 0
+
+    local tmp_tsv
+    tmp_tsv=$(run_as_build_user mktemp "${STATE_DIR}/git-fallbacks.XXXXXX")
+    awk -F '\t' -v target="$git_pkg" '$1 != target && NF >= 3 { print }' "$GIT_FALLBACKS_FILE" > "$tmp_tsv" 2>/dev/null || true
+    if [[ -s "$tmp_tsv" ]]; then
+        run_as_build_user mv -f -T "$tmp_tsv" "$GIT_FALLBACKS_FILE" 2>/dev/null || mv -f -T "$tmp_tsv" "$GIT_FALLBACKS_FILE"
+    else
+        rm -f "$tmp_tsv" "$GIT_FALLBACKS_FILE"
+    fi
+}
+
+_build_and_install_release_aur_pkg() {
+    local release_pkg="$1"
+    local clone_name="${_aur_pkgbase_cache["$release_pkg"]:-$release_pkg}"
+    local rel_dir pkgfiles f sub_pkg target_file=""
+
+    rel_dir=$(run_as_build_user mktemp -d)
+    if ! run_as_build_user git clone --depth 1 "https://aur.archlinux.org/${clone_name}.git" "$rel_dir" 2>/dev/null || [[ ! -f "$rel_dir/PKGBUILD" ]]; then
+        rm -rf "$rel_dir"
+        return 1
+    fi
+    if ! verify_cloned_aur_dir "$release_pkg" "$rel_dir"; then
+        rm -rf "$rel_dir"
+        return 1
+    fi
+    _preflight_haskell_check "$release_pkg" "$rel_dir"
+
+    mapfile -t pkgfiles < <(run_as_build_user env -C "$rel_dir" makepkg --packagelist 2>/dev/null || true)
+    if [[ "$clone_name" == "$release_pkg" && ${#pkgfiles[@]} -eq 0 ]]; then
+        if run_makepkg_with_recovery "$rel_dir" -Csf --noconfirm; then
+            rm -rf "$rel_dir"
+            return 0
+        fi
+        rm -rf "$rel_dir"
+        return 1
+    fi
+
+    if run_makepkg_with_recovery "$rel_dir" -Csf --noconfirm; then
+        mapfile -t pkgfiles < <(run_as_build_user env -C "$rel_dir" makepkg --packagelist 2>/dev/null || true)
+        for f in "${pkgfiles[@]}"; do
+            [[ -f "$f" ]] || continue
+            sub_pkg=$(pacman -Qp "$f" 2>/dev/null | awk '{print $1}' || true)
+            if [[ "$sub_pkg" == "$release_pkg" ]]; then
+                target_file="$f"
+                break
+            fi
+        done
+        if [[ -n "$target_file" && -f "$target_file" ]] && _run_pipe_yes sudo pacman -U --needed -- "$target_file"; then
+            rm -rf "$rel_dir"
+            return 0
+        fi
+    fi
+
+    rm -rf "$rel_dir"
+    # Fallback to paru if makepkg -s lacked an AUR dependency
+    _run_pipe_yes _run_build_cmd "${PARU_BIN:-/usr/bin/paru}" --skipreview -S --needed "$release_pkg"
+}
+
+# Fall back to non-git release package when a -git package fails to build in FORCE_REBUILD.
+_attempt_git_fallback() {
+    local pkg_name="$1"
+    local build_dir="$2"
+    [[ "$pkg_name" == *-git ]] || return 1
+
+    local release_pkg="${pkg_name%-git}"
+    [[ -n "$release_pkg" ]] || return 1
+
+    local failed_commit
+    failed_commit=$(_resolve_git_pkg_commit "$pkg_name" "$build_dir")
+
+    if _is_official_noncustom_pkg "$release_pkg"; then
+        msg_warn "Fallback: '$pkg_name' failed at commit ${failed_commit}; installing official release package '$release_pkg' instead."
+        if _run_pipe_yes sudo pacman -S --needed "$release_pkg"; then
+            _record_git_fallback "$pkg_name" "$release_pkg" "$failed_commit"
+            dispatch_plugin_hooks package-rebuilt "$pkg_name"
+            return 0
+        fi
+        return 1
+    fi
+
+    fetch_aur_metadata_batch "$release_pkg"
+    if [[ -n "${_aur_pkgs_cache["$release_pkg"]+x}" ]]; then
+        msg_warn "Fallback: '$pkg_name' failed at commit ${failed_commit}; installing AUR release package '$release_pkg' instead."
+        if _build_and_install_release_aur_pkg "$release_pkg"; then
+            _record_git_fallback "$pkg_name" "$release_pkg" "$failed_commit"
+            dispatch_plugin_hooks package-rebuilt "$pkg_name"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Retry recorded -git fallbacks when a newer upstream commit/version is available.
+_process_git_fallbacks_retry() {
+    [[ -s "${GIT_FALLBACKS_FILE:-}" ]] || return 0
+
+    local -A explicit_set=()
+    local t
+    for t in "$@"; do
+        explicit_set["${t#*/}"]=1
+    done
+
+    local -a rows=()
+    mapfile -t rows < "$GIT_FALLBACKS_FILE"
+    [[ ${#rows[@]} -gt 0 ]] || return 0
+
+    local -a git_pkgs_to_query=()
+    local row git_pkg release_pkg failed_commit ts
+    for row in "${rows[@]}"; do
+        IFS=$'\t' read -r git_pkg release_pkg failed_commit ts <<< "$row"
+        [[ -n "$git_pkg" && -n "$release_pkg" ]] || continue
+        [[ -n "${explicit_set["$git_pkg"]:-}" ]] && continue
+        git_pkgs_to_query+=("$git_pkg")
+    done
+    [[ ${#git_pkgs_to_query[@]} -gt 0 ]] || return 0
+
+    fetch_aur_metadata_batch "${git_pkgs_to_query[@]}"
+
+    for row in "${rows[@]}"; do
+        IFS=$'\t' read -r git_pkg release_pkg failed_commit ts <<< "$row"
+        [[ -n "$git_pkg" && -n "$release_pkg" ]] || continue
+        [[ -n "${explicit_set["$git_pkg"]:-}" ]] && continue
+
+        local clone_name="${_aur_pkgbase_cache["$git_pkg"]:-$git_pkg}"
+        local check_dir latest_commit=""
+        check_dir=$(run_as_build_user mktemp -d)
+        if ! run_as_build_user git clone --depth 1 "https://aur.archlinux.org/${clone_name}.git" "$check_dir" 2>/dev/null; then
+            rm -rf "$check_dir"
+            if [[ -d "${PARU_CLONE_DIR:-}/$clone_name" ]]; then
+                latest_commit=$(_resolve_git_pkg_commit "$git_pkg" "${PARU_CLONE_DIR}/$clone_name")
+            else
+                continue
+            fi
+        else
+            latest_commit=$(_resolve_git_pkg_commit "$git_pkg" "$check_dir")
+        fi
+
+        if [[ -z "$latest_commit" || "$latest_commit" == "unknown" || "$latest_commit" == "$failed_commit" ]]; then
+            msg_info "No new commit yet for fallback '$git_pkg' (still at ${failed_commit}); keeping '$release_pkg'."
+            [[ -d "$check_dir" ]] && rm -rf "$check_dir"
+            continue
+        fi
+
+        msg_info "New commit available for '$git_pkg' (${failed_commit} -> ${latest_commit}). Retrying build..."
+        if [[ "${DRY_RUN:-false}" == true ]]; then
+            msg_info "DRY RUN: would retry building '$git_pkg' at commit $latest_commit"
+            [[ -d "$check_dir" ]] && rm -rf "$check_dir"
+            continue
+        fi
+
+        if [[ ! -f "$check_dir/PKGBUILD" ]]; then
+            rm -rf "$check_dir"
+            continue
+        fi
+        if ! verify_cloned_aur_dir "$git_pkg" "$check_dir"; then
+            rm -rf "$check_dir"
+            continue
+        fi
+
+        _preflight_haskell_check "$git_pkg" "$check_dir"
+        local retry_ok=false
+        local -a pre_files=() built_files=()
+        mapfile -t pre_files < <(run_as_build_user env -C "$check_dir" makepkg --packagelist 2>/dev/null || true)
+        if [[ ${#pre_files[@]} -eq 0 ]]; then
+            if run_makepkg_with_recovery "$check_dir" -Csf --noconfirm && _run_pipe_yes _run_build_cmd "${PARU_BIN:-/usr/bin/paru}" --skipreview -S --needed "$git_pkg"; then
+                retry_ok=true
+            fi
+        elif run_makepkg_with_recovery "$check_dir" -Csf --noconfirm; then
+            mapfile -t built_files < <(run_as_build_user env -C "$check_dir" makepkg --packagelist 2>/dev/null || true)
+            local target_file="" f sub_pkg
+            for f in "${built_files[@]}"; do
+                [[ -f "$f" ]] || continue
+                sub_pkg=$(pacman -Qp "$f" 2>/dev/null | awk '{print $1}' || true)
+                if [[ "$sub_pkg" == "$git_pkg" ]]; then
+                    target_file="$f"
+                    break
+                fi
+            done
+            if [[ -n "$target_file" && -f "$target_file" ]] && _run_pipe_yes sudo pacman -U --needed -- "$target_file"; then
+                retry_ok=true
+            fi
+        fi
+
+        rm -rf "$check_dir"
+        if [[ "$retry_ok" == true ]]; then
+            msg_info "Rebuilt '$git_pkg' successfully at commit ${latest_commit}. Removing fallback entry."
+            _remove_git_fallback "$git_pkg"
+            dispatch_plugin_hooks package-rebuilt "$git_pkg"
+        else
+            msg_warn "Retry of '$git_pkg' failed at commit ${latest_commit}; keeping '$release_pkg' and updating fallback state."
+            _record_git_fallback "$git_pkg" "$release_pkg" "$latest_commit"
+        fi
+    done
+}
+
+_PARU_WRAPPER_HEAVY_HOOKS=(
+    "05-snap-pac-pre.hook"
+    "zz-snap-pac-post.hook"
+    "zz-snap-pac-postz-grub.hook"
+    "paru-completion-update.hook"
+    "rebuild-check.hook"
+    "list-orphans.hook"
+    "fnm-update.hook"
+)
+
+_is_pid_alive() {
+    local pid="${1:-}"
+    [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 0 ]] || return 1
+    local stat_line="" stat_tail="" state=""
+    if kill -0 "$pid" 2>/dev/null || [[ -d "/proc/$pid" ]]; then
+        if read -r stat_line < "/proc/$pid/stat" 2>/dev/null; then
+            stat_tail="${stat_line##*)}"
+            read -r state _ <<< "$stat_tail" || true
+            [[ "$state" == "Z" ]] && return 1
+        fi
+        return 0
+    fi
+    return 1
+}
+
+_hook_priv_run() {
+    local target_dir="${PARU_WRAPPER_HOOKS_DIR:-/etc/pacman.d/hooks}"
+    if [[ "$(id -u)" -eq 0 ]] || [[ -d "$target_dir" && -w "$target_dir" ]]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+_write_hooks_pid_file() {
+    local pid_file="${PARU_WRAPPER_HOOKS_PID_FILE:-/run/paru-wrapper-hooks.pid}"
+    local pid_dir
+    pid_dir=$(dirname "$pid_file")
+    if [[ "$(id -u)" -eq 0 ]] || [[ -d "$pid_dir" && -w "$pid_dir" ]]; then
+        mkdir -p "$pid_dir" 2>/dev/null || true
+        printf '%s\n' "$$" > "$pid_file"
+    else
+        printf '%s\n' "$$" | sudo tee "$pid_file" >/dev/null
+    fi
+}
+
+_remove_hooks_pid_file() {
+    local pid_file="${PARU_WRAPPER_HOOKS_PID_FILE:-/run/paru-wrapper-hooks.pid}"
+    local pid_dir
+    pid_dir=$(dirname "$pid_file")
+    if [[ "$(id -u)" -eq 0 ]] || [[ -d "$pid_dir" && -w "$pid_dir" ]]; then
+        rm -f "$pid_file" 2>/dev/null || true
+    else
+        sudo rm -f "$pid_file" 2>/dev/null || true
+    fi
+}
+
+_restore_pacman_hooks() {
+    local hooks_dir="${PARU_WRAPPER_HOOKS_DIR:-/etc/pacman.d/hooks}"
+    local hook
+    for hook in "${_PARU_WRAPPER_HEAVY_HOOKS[@]}"; do
+        if [[ -L "$hooks_dir/$hook" && "$(readlink "$hooks_dir/$hook" 2>/dev/null || true)" == "/dev/null" ]]; then
+            _hook_priv_run rm -f "$hooks_dir/$hook" 2>/dev/null || true
+        fi
+        if [[ -f "$hooks_dir/${hook}.paru-wrapper-disabled" ]]; then
+            _hook_priv_run mv -f "$hooks_dir/${hook}.paru-wrapper-disabled" "$hooks_dir/$hook" 2>/dev/null || true
+        fi
+    done
+    _remove_hooks_pid_file
+}
+
+# Clean up disabled hooks from an interrupted session only when the owner PID is no longer alive.
+_cleanup_stale_hooks() {
+    local hooks_dir="${PARU_WRAPPER_HOOKS_DIR:-/etc/pacman.d/hooks}"
+    local pid_file="${PARU_WRAPPER_HOOKS_PID_FILE:-/run/paru-wrapper-hooks.pid}"
+    local any_disabled=false hook
+    for hook in "${_PARU_WRAPPER_HEAVY_HOOKS[@]}"; do
+        if { [[ -L "$hooks_dir/$hook" ]] && [[ "$(readlink "$hooks_dir/$hook" 2>/dev/null || true)" == "/dev/null" ]]; } || [[ -f "$hooks_dir/${hook}.paru-wrapper-disabled" ]]; then
+            any_disabled=true
+            break
+        fi
+    done
+    [[ "$any_disabled" == true ]] || return 0
+
+    local owner_pid=""
+    if [[ -r "$pid_file" ]]; then
+        read -r owner_pid < "$pid_file" 2>/dev/null || true
+        owner_pid="${owner_pid//[[:space:]]/}"
+    fi
+    if [[ -n "$owner_pid" ]] && _is_pid_alive "$owner_pid"; then
+        return 0
+    fi
+
+    msg_warn "Detected stale disabled hooks from a previous run${owner_pid:+ (PID $owner_pid no longer active)}. Restoring..."
+    _restore_pacman_hooks
+}
+
+_disable_pacman_hooks() {
+    local hooks_dir="${PARU_WRAPPER_HOOKS_DIR:-/etc/pacman.d/hooks}"
+    local sys_hooks_dir="${PARU_WRAPPER_SYSTEM_HOOKS_DIR:-/usr/share/libalpm/hooks}"
+    local pid_file="${PARU_WRAPPER_HOOKS_PID_FILE:-/run/paru-wrapper-hooks.pid}"
+
+    local owner_pid=""
+    if [[ -r "$pid_file" ]]; then
+        read -r owner_pid < "$pid_file" 2>/dev/null || true
+        owner_pid="${owner_pid//[[:space:]]/}"
+    fi
+    if [[ -n "$owner_pid" && "$owner_pid" != "$$" ]] && _is_pid_alive "$owner_pid"; then
+        msg_info "Hooks already disabled by active paru-wrapper session (PID $owner_pid)."
+        return 1
+    fi
+
+    _hook_priv_run mkdir -p "$hooks_dir"
+    _write_hooks_pid_file
+    local hook
+    for hook in "${_PARU_WRAPPER_HEAVY_HOOKS[@]}"; do
+        if [[ -f "$hooks_dir/$hook" && ! -L "$hooks_dir/$hook" ]]; then
+            if [[ ! -f "$hooks_dir/${hook}.paru-wrapper-disabled" ]]; then
+                _hook_priv_run mv -f "$hooks_dir/$hook" "$hooks_dir/${hook}.paru-wrapper-disabled"
+            fi
+            _hook_priv_run ln -sf -T /dev/null "$hooks_dir/$hook"
+        elif [[ -e "$sys_hooks_dir/$hook" || -L "$hooks_dir/$hook" ]]; then
+            _hook_priv_run ln -sf -T /dev/null "$hooks_dir/$hook"
+        fi
+    done
+    return 0
+}
+
+_parse_si_deps() {
+    awk '/^(Depends On|Depends|Make Deps|Make Depends|Check Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//; /^[Nn]one$/d' | sort -u || true
 }
 
 # Purge corrupted paru clone cache directories (missing/broken .git or unreadable objects)
@@ -948,6 +1592,13 @@ ensure_repo_lock_clear() {
 : "${PARU_WRAPPER_DRY_RUN:=false}"
 : "${PARU_WRAPPER_LOW_PRIORITY:=true}"
 : "${PARU_WRAPPER_AUTO_UPDATE_INSTALLED:=true}"
+: "${PARU_WRAPPER_CLEANUP_BUILDDEPS:=0}"
+: "${PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER:=0}"
+: "${PARU_WRAPPER_BATCH_INSTALL:=1}"
+: "${PARU_WRAPPER_HOOKS_DIR:=/etc/pacman.d/hooks}"
+: "${PARU_WRAPPER_SYSTEM_HOOKS_DIR:=/usr/share/libalpm/hooks}"
+: "${PARU_WRAPPER_HOOKS_PID_FILE:=/run/paru-wrapper-hooks.pid}"
+: "${PARU_WRAPPER_STATE_DIR:=}"
 
 # Load configurations
 if [ -f "/etc/paru-wrapper.conf" ]; then
@@ -971,12 +1622,27 @@ PARU_WRAPPER_DRY_RUN="${PARU_WRAPPER_DRY_RUN:-false}"
 PARU_WRAPPER_LOW_PRIORITY="${PARU_WRAPPER_LOW_PRIORITY:-true}"
 LOW_PRIORITY="$PARU_WRAPPER_LOW_PRIORITY"
 PARU_WRAPPER_AUTO_UPDATE_INSTALLED="${PARU_WRAPPER_AUTO_UPDATE_INSTALLED:-true}"
+PARU_WRAPPER_CLEANUP_BUILDDEPS="${PARU_WRAPPER_CLEANUP_BUILDDEPS:-0}"
+CLEANUP_BUILDDEPS="$PARU_WRAPPER_CLEANUP_BUILDDEPS"
+PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER="${PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER:-0}"
+export PARU_WRAPPER_PKGSCAN_AUTO_ACCEPT_DANGER
+PARU_WRAPPER_BATCH_INSTALL="${PARU_WRAPPER_BATCH_INSTALL:-1}"
+BATCH_INSTALL="$PARU_WRAPPER_BATCH_INSTALL"
 PARU_WRAPPER_CLONE_REPAIR_MAX="${PARU_WRAPPER_CLONE_REPAIR_MAX:-3}"
 PARU_WRAPPER_NET_RETRY_MAX="${PARU_WRAPPER_NET_RETRY_MAX:-5}"
 PARU_WRAPPER_NET_WAIT_TIMEOUT="${PARU_WRAPPER_NET_WAIT_TIMEOUT:-1800}"
 PARU_WRAPPER_NET_CHECK_URL="${PARU_WRAPPER_NET_CHECK_URL:-https://archlinux.org}"
 PARU_WRAPPER_PART_RETRY_MAX="${PARU_WRAPPER_PART_RETRY_MAX:-2}"
 PARU_WRAPPER_RETRY_DELAY="${PARU_WRAPPER_RETRY_DELAY:-2}"
+
+if [ -n "${PARU_WRAPPER_STATE_DIR:-}" ]; then
+    STATE_DIR="$PARU_WRAPPER_STATE_DIR"
+elif [ "$(id -u)" -eq 0 ] && [ -n "${_PW_INVOKING_HOME:-}" ]; then
+    STATE_DIR="${_PW_INVOKING_HOME}/.local/state/paru-wrapper"
+else
+    STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/paru-wrapper"
+fi
+GIT_FALLBACKS_FILE="${STATE_DIR}/git-fallbacks.tsv"
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 # Handle initialization commands
@@ -1069,6 +1735,8 @@ fi
 # Parse wrapper-specific flags (remove them from args passed to paru)
 DRY_RUN="$PARU_WRAPPER_DRY_RUN"
 LOW_PRIORITY="$PARU_WRAPPER_LOW_PRIORITY"
+CLEANUP_BUILDDEPS="$PARU_WRAPPER_CLEANUP_BUILDDEPS"
+BATCH_INSTALL="$PARU_WRAPPER_BATCH_INSTALL"
 POSITIONAL_ARGS=()
 for arg in "$@"; do
     case "$arg" in
@@ -1081,6 +1749,18 @@ for arg in "$@"; do
         --no-low-priority)
             LOW_PRIORITY=false
             ;;
+        --cleanup-builddeps)
+            CLEANUP_BUILDDEPS=1
+            ;;
+        --no-cleanup-builddeps)
+            CLEANUP_BUILDDEPS=0
+            ;;
+        --no-batch)
+            BATCH_INSTALL=0
+            ;;
+        --batch)
+            BATCH_INSTALL=1
+            ;;
         *)
             POSITIONAL_ARGS+=("$arg")
             ;;
@@ -1088,13 +1768,8 @@ for arg in "$@"; do
 done
 set -- "${POSITIONAL_ARGS[@]}"
 
-# Safely clean up any stale null symlinks from a previously interrupted transaction
-for hook in 05-snap-pac-pre.hook zz-snap-pac-post.hook paru-completion-update.hook rebuild-check.hook; do
-    if [ -L "/etc/pacman.d/hooks/$hook" ] && [ "$(readlink "/etc/pacman.d/hooks/$hook")" = "/dev/null" ]; then
-        msg_warn "Detected stale disabled hook '$hook' from a previous run. Restoring..."
-        sudo rm -f "/etc/pacman.d/hooks/$hook"
-    fi
-done
+# Safely clean up any stale disabled hooks from a dead previous transaction
+_cleanup_stale_hooks
 
 _PARU_VALUE_FLAGS='--aururl|--aurrpcurl|--editor|--makepkg|--pacman|--pacman-conf|--git|--gpg|--sudo|--pkgctl|--fm|--bat|--makepkgconf|--editorflags|--mflags|--gitflags|--gpgflags|--sudoflags|--batflags|--fmflags|--chrootflags|--chrootpkgs|--rootchrootpkgs|--completioninterval|--minimumreleaseage|--minimumreleaseageexclude|--sortby|--searchby|--limit|--develsuffixes|--builddir|--clonedir|--develfile|--dbpath|--root|--ask|--cachedir|--arch|--color|--config|--gpgdir|--hookdir|--logfile|--sysroot|--ignore|--ignoregroup|--ignoredevel|--assume-installed|--print-format|--overwrite|--mode'
 
@@ -1235,25 +1910,27 @@ if [ "$is_transaction" = true ]; then
         mkdir -p "$CACHE_DIR"
     fi
 
+    declare -a _batch_cleanup_dirs=()
     if [ "$is_anneal" = true ] || [ "${FORCE_REBUILD:-0}" = "1" ]; then
-        # Disable selected hooks to prevent snapper/completion/rebuild-check spam during intermediate package installations
-        msg_info "Temporarily disabling redundant hooks..."
-        sudo ln -sf -T /dev/null /etc/pacman.d/hooks/05-snap-pac-pre.hook
-        sudo ln -sf -T /dev/null /etc/pacman.d/hooks/zz-snap-pac-post.hook
-        sudo ln -sf -T /dev/null /etc/pacman.d/hooks/paru-completion-update.hook
-        sudo ln -sf -T /dev/null /etc/pacman.d/hooks/rebuild-check.hook
-        hooks_disabled=true
+        if [ "$DRY_RUN" = true ]; then
+            msg_info "DRY RUN: would temporarily disable redundant pacman hooks"
+            hooks_disabled=true
+        elif _disable_pacman_hooks; then
+            msg_info "Temporarily disabling redundant hooks..."
+            hooks_disabled=true
+        fi
     fi
 
     start_marker=$(mktemp)
 
     cleanup_hooks() {
         # Restore pacman hooks
-        if [ "$hooks_disabled" = true ]; then
-            sudo rm -f /etc/pacman.d/hooks/05-snap-pac-pre.hook \
-                       /etc/pacman.d/hooks/zz-snap-pac-post.hook \
-                       /etc/pacman.d/hooks/paru-completion-update.hook \
-                       /etc/pacman.d/hooks/rebuild-check.hook 2>/dev/null || true
+        if [ "$hooks_disabled" = true ] && [ "$DRY_RUN" != true ]; then
+            _restore_pacman_hooks
+        fi
+        if [ ${#_batch_cleanup_dirs[@]} -gt 0 ]; then
+            rm -rf "${_batch_cleanup_dirs[@]}" 2>/dev/null || true
+            _batch_cleanup_dirs=()
         fi
         rm -f "$CACHE_DIR/paru_total_packages" "$CACHE_DIR/paru_completed_packages" "${_CURRENT_ATTEMPT_MARKER:-}" 2>/dev/null || true
 
@@ -1327,10 +2004,13 @@ if [ "$is_transaction" = true ]; then
     other_args=()
     split_paru_args other_args targets "$@"
     is_rebuild_cmd=false
+    is_system_upgrade=false
     for arg in "${other_args[@]}"; do
         if [[ "$arg" == "--rebuild" || "$arg" == "--redownload" ]]; then
             is_rebuild_cmd=true
-            break
+        fi
+        if [[ "$arg" =~ ^-S[a-zA-Z]*u[a-zA-Z]*$ || "$arg" == "--sysupgrade" ]]; then
+            is_system_upgrade=true
         fi
     done
 
@@ -1395,6 +2075,16 @@ if [ "$is_transaction" = true ]; then
     # Filter targets and rebuild local packages
     filtered_targets=()
     force_rebuild_failures=()
+    _pending_batch_pkgs=()
+    _pending_batch_files=()
+    declare -A _seen_batch_pkgs=()
+    declare -A _batch_pkg_build_dirs=()
+    declare -a _target_extra_deps=()
+    _DEFER_BATCH_INSTALL=0
+    if _is_batch_install_enabled; then
+        _DEFER_BATCH_INSTALL=1
+    fi
+
     for pkg in "${targets[@]}"; do
         if is_official_pkg "$pkg"; then
             filtered_targets+=("$pkg")
@@ -1413,6 +2103,10 @@ if [ "$is_transaction" = true ]; then
             if [[ "$pkg" == */* && "$pkg" != "$PARU_WRAPPER_REPO/"* && "$pkg" != aur/* ]]; then
                 # Explicit custom PKGBUILD/non-ALPM repo target (not MKVPKG or aur)
                 filtered_targets+=("$pkg")
+            elif [ "$in_aur" -eq 0 ] && [[ "${_aur_rpc_failed_pkgs["$pkg_name"]:-0}" -eq 1 ]] && [ ! -f "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}/PKGBUILD" ]; then
+                # AUR RPC lookup failed (DNS/network error): never misclassify as "not in the AUR"
+                msg_warn "AUR RPC lookup failed for '$pkg'; avoiding false 'not in AUR' classification and passing through to paru."
+                filtered_targets+=("$pkg")
             elif [ "$in_aur" -eq 0 ]; then
                 # Local package not in AUR: rebuild from PROJECTS_DIR if available
                 if [ -d "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}" ] && [ -f "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}/PKGBUILD" ]; then
@@ -1420,10 +2114,14 @@ if [ "$is_transaction" = true ]; then
                     if [ "${FORCE_REBUILD:-0}" = "1" ]; then
                         local_makepkg_flags="-Csfi"
                     fi
+                    local_info=$(_extract_pkgbuild_info "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}")
+                    local_deps=$(awk -F= '/^DEPS=/{sub(/^DEPS=/, ""); print}' <<< "$local_info")
+                    [[ -n "$local_deps" ]] && _target_extra_deps+=($local_deps)
                     msg_info "Rebuilding local package '$pkg_name' from source in ${PARU_WRAPPER_PROJECTS_DIR}..."
                     if [ "$DRY_RUN" = true ]; then
                         msg_info "DRY RUN: would run: (cd \"${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}\" && makepkg ${local_makepkg_flags} --noconfirm)"
                     else
+                        _preflight_haskell_check "$pkg_name" "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}"
                         if run_makepkg_with_recovery "${PARU_WRAPPER_PROJECTS_DIR}/${pkg_name}" "$local_makepkg_flags" --noconfirm; then
                             dispatch_plugin_hooks package-rebuilt "$pkg_name"
                         else
@@ -1449,12 +2147,21 @@ if [ "$is_transaction" = true ]; then
                         continue
                     fi
                     if [[ -n "${_built_split_files["$pkg_name"]:-}" && -f "${_built_split_files["$pkg_name"]}" ]]; then
-                        msg_info "Installing already-built split subpackage '$pkg_name' from '$clone_name'..."
-                        if sudo pacman -U --noconfirm -- "${_built_split_files["$pkg_name"]}"; then
-                            dispatch_plugin_hooks package-rebuilt "$pkg_name"
+                        if [[ "$_DEFER_BATCH_INSTALL" == "1" ]]; then
+                            if [[ -z "${_seen_batch_pkgs["$pkg_name"]:-}" ]]; then
+                                _seen_batch_pkgs["$pkg_name"]=1
+                                _pending_batch_pkgs+=("$pkg_name")
+                                _pending_batch_files+=("${_built_split_files["$pkg_name"]}")
+                            fi
                         else
-                            msg_warn "Failed to install split subpackage '$pkg_name'."
-                            force_rebuild_failures+=("$pkg_name")
+                            msg_info "Installing already-built split subpackage '$pkg_name' from '$clone_name'..."
+                            if sudo pacman -U --noconfirm -- "${_built_split_files["$pkg_name"]}"; then
+                                [[ "$pkg_name" == *-git ]] && _remove_git_fallback "$pkg_name"
+                                dispatch_plugin_hooks package-rebuilt "$pkg_name"
+                            else
+                                msg_warn "Failed to install split subpackage '$pkg_name'."
+                                force_rebuild_failures+=("$pkg_name")
+                            fi
                         fi
                         continue
                     fi
@@ -1466,6 +2173,9 @@ if [ "$is_transaction" = true ]; then
                             filtered_targets+=("$pkg")
                             continue
                         fi
+                        cloned_info=$(_extract_pkgbuild_info "$build_dir")
+                        cloned_deps=$(awk -F= '/^DEPS=/{sub(/^DEPS=/, ""); print}' <<< "$cloned_info")
+                        [[ -n "$cloned_deps" ]] && _target_extra_deps+=($cloned_deps)
                         if ! verify_cloned_aur_dir "$pkg_name" "$build_dir"; then
                             msg_warn "Skipping '$pkg_name' due to failed security verification."
                             _blocked_pkgbases["$clone_name"]=1
@@ -1474,12 +2184,28 @@ if [ "$is_transaction" = true ]; then
                             continue
                         fi
                         if rebuild_cloned_aur_package "$pkg_name" "$clone_name" "$build_dir" "${targets[@]}"; then
-                            dispatch_plugin_hooks package-rebuilt "$pkg_name"
+                            if [[ "$_DEFER_BATCH_INSTALL" == "1" && -n "${_LAST_BUILT_PKG_FILE:-}" ]]; then
+                                if [[ -z "${_seen_batch_pkgs["$pkg_name"]:-}" ]]; then
+                                    _seen_batch_pkgs["$pkg_name"]=1
+                                    _pending_batch_pkgs+=("$pkg_name")
+                                    _pending_batch_files+=("$_LAST_BUILT_PKG_FILE")
+                                    _batch_pkg_build_dirs["$pkg_name"]="$build_dir"
+                                fi
+                                _batch_cleanup_dirs+=("$build_dir")
+                            else
+                                [[ "$pkg_name" == *-git ]] && _remove_git_fallback "$pkg_name"
+                                dispatch_plugin_hooks package-rebuilt "$pkg_name"
+                                rm -rf "$build_dir"
+                            fi
                         else
-                            msg_warn "Failed to rebuild AUR package '$pkg_name'."
-                            force_rebuild_failures+=("$pkg_name")
+                            if [[ "$pkg_name" == *-git ]] && _attempt_git_fallback "$pkg_name" "$build_dir"; then
+                                :
+                            else
+                                msg_warn "Failed to rebuild AUR package '$pkg_name'."
+                                force_rebuild_failures+=("$pkg_name")
+                            fi
+                            rm -rf "$build_dir"
                         fi
-                        rm -rf "$build_dir"
                     else
                         msg_warn "Failed to clone '$clone_name' from AUR for '$pkg_name'. Passing to paru."
                         rm -rf "$build_dir"
@@ -1492,6 +2218,41 @@ if [ "$is_transaction" = true ]; then
             fi
         fi
     done
+
+    # Install all batched FORCE_REBUILD packages in one pacman -U transaction
+    if [ ${#_pending_batch_files[@]} -gt 0 ]; then
+        msg_info "Installing ${#_pending_batch_files[@]} rebuilt package(s) in a single batched transaction..."
+        if sudo pacman -U --noconfirm -- "${_pending_batch_files[@]}"; then
+            for _bp in "${_pending_batch_pkgs[@]}"; do
+                [[ "$_bp" == *-git ]] && _remove_git_fallback "$_bp"
+                dispatch_plugin_hooks package-rebuilt "$_bp"
+            done
+        else
+            msg_warn "Batched pacman -U failed; falling back to per-package installation..."
+            for _bidx in "${!_pending_batch_files[@]}"; do
+                _bf="${_pending_batch_files[$_bidx]}"
+                _bp="${_pending_batch_pkgs[$_bidx]}"
+                if sudo pacman -U --noconfirm -- "$_bf"; then
+                    [[ "$_bp" == *-git ]] && _remove_git_fallback "$_bp"
+                    dispatch_plugin_hooks package-rebuilt "$_bp"
+                elif [[ "$_bp" == *-git && -n "${_batch_pkg_build_dirs["$_bp"]:-}" ]] && _attempt_git_fallback "$_bp" "${_batch_pkg_build_dirs["$_bp"]}"; then
+                    :
+                else
+                    msg_warn "Failed to install rebuilt package '$_bp'."
+                    force_rebuild_failures+=("$_bp")
+                fi
+            done
+        fi
+        if [ ${#_batch_cleanup_dirs[@]} -gt 0 ]; then
+            rm -rf "${_batch_cleanup_dirs[@]}" 2>/dev/null || true
+            _batch_cleanup_dirs=()
+        fi
+    fi
+
+    # Check recorded -git fallbacks for newer upstream commits on update or rebuild runs
+    if [ "$is_system_upgrade" = true ] || [ "${FORCE_REBUILD:-0}" = "1" ]; then
+        _process_git_fallbacks_retry "${targets[@]}"
+    fi
 
     # Update command-line arguments to exclude filtered-out local packages
     set -- "${other_args[@]}" "${filtered_targets[@]}"
@@ -1533,7 +2294,7 @@ if [ "$is_transaction" = true ]; then
         new_deps=""
         if [[ -n "$upgrades" ]]; then
             # Query pacman sync database for repository packages dependencies (including make dependencies if available)
-            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps|Make Depends|Check Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//; /^[Nn]one$/d' | sort -u || true)
+            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | _parse_si_deps)
             
             # Query AUR RPC (or paru info) for AUR package dependencies and makedepends
             aur_deps=""
@@ -1546,23 +2307,58 @@ if [ "$is_transaction" = true ]; then
             fi
             aur_upgrades=$(echo "$upgrades" | grep -vFf <(echo "$official_pkgs_list") || true)
             if [[ -n "$aur_upgrades" ]]; then
-                aur_deps=$(echo "$aur_upgrades" | xargs -r /usr/bin/paru --aur -Si 2>/dev/null | awk '/^(Depends On|Depends|Make Deps|Make Depends|Check Deps)[[:space:]]*:/ { in_depends = 1; sub(/^[^:]*:[[:space:]]*/, ""); print; next } /^[a-zA-Z]/ { in_depends = 0 } in_depends { sub(/^[[:space:]]+/, ""); print }' | tr ' ' '\n' | sed '/^$/d; s/[<>=].*//; /^[Nn]one$/d' | sort -u || true)
+                aur_deps=$(echo "$aur_upgrades" | xargs -r "${PARU_BIN:-/usr/bin/paru}" --aur -Si 2>/dev/null | _parse_si_deps)
             fi
 
             new_deps=$(echo -e "${repo_deps}\n${aur_deps}" | sort -u)
         fi
 
-        # 4. Filter out any orphans that are in new_deps
-        # Performance Optimization: Populate an associative array to avoid O(N*M) slow string substring matching loop.
+        # 4. Filter out any orphans that are in new_deps (plus build-deps/toolchains & target makedeps by default)
         declare -A new_deps_map=()
         while IFS= read -r dep; do
             [[ -n "$dep" ]] && new_deps_map["$dep"]=1
         done <<< "$new_deps"
 
+        declare -A build_deps_preserve_map=()
+        if ! _is_cleanup_builddeps_enabled; then
+            for _bd in \
+                rustup rust cargo rust-bindgen cbindgen cargo-c maturin python-setuptools-rust \
+                cmake meson ninja make automake autoconf libtool pkgconf bison flex m4 patch \
+                gcc clang lld llvm nasm yasm ccache extra-cmake-modules qt6-tools qt5-tools \
+                wayland-protocols go ghc cabal-install stack happy alex hscolour \
+                scdoc doxygen yelp-tools gtk-doc gi-docgen asciidoc asciidoctor pandoc pandoc-cli \
+                python-sphinx python-build python-installer python-wheel python-setuptools \
+                python-poetry-core python-hatchling python-flit-core python-scikit-build-core cython \
+                swig vala gobject-introspection glslang shaderc vulkan-headers nodejs npm pnpm yarn; do
+                build_deps_preserve_map["$_bd"]=1
+            done
+
+            if [ ${#targets[@]} -gt 0 ]; then
+                target_repo_deps=$(LC_ALL=C pacman -Si "${targets[@]}" 2>/dev/null | _parse_si_deps)
+                while IFS= read -r dep; do
+                    [[ -n "$dep" ]] && new_deps_map["$dep"]=1
+                done <<< "$target_repo_deps"
+
+                for _t in "${targets[@]}"; do
+                    _tname="${_t#*/}"
+                    if [[ -n "${_aur_makedepends_cache["$_tname"]:-}" ]]; then
+                        for dep in ${_aur_makedepends_cache["$_tname"]}; do
+                            new_deps_map["$dep"]=1
+                        done
+                    fi
+                done
+            fi
+            for dep in "${_target_extra_deps[@]}"; do
+                [[ -n "$dep" ]] && new_deps_map["$dep"]=1
+            done
+        fi
+
         orphans_to_remove=()
         for orphan in $orphans; do
             if [[ "${new_deps_map[$orphan]+isset}" ]]; then
-                msg_info "Preserving orphan package '$orphan' (will be needed by incoming updates)."
+                msg_info "Preserving orphan package '$orphan' (will be needed by incoming updates or targets)."
+            elif [[ "${build_deps_preserve_map[$orphan]+isset}" ]]; then
+                msg_info "Preserving build-dep/toolchain '$orphan' (pass --cleanup-builddeps or PARU_WRAPPER_CLEANUP_BUILDDEPS=1 to remove)."
             else
                 orphans_to_remove+=("$orphan")
             fi
@@ -1589,7 +2385,6 @@ purge_broken_clones
 if [ -n "${PARU_WRAPPER_REPO_DB:-}" ] && [ "$DRY_RUN" != true ]; then
     ensure_repo_lock_clear "$PARU_WRAPPER_REPO_DB" || true
 fi
-force_rebuild_failures=()
 if [ "$is_transaction" = true ]; then
     if [ "${FORCE_REBUILD:-0}" = "1" ] || [[ " $* " =~ " --rebuild " ]]; then
         if [ "$DRY_RUN" = true ]; then
@@ -1618,7 +2413,6 @@ else
     fi
 fi
 
-force_rebuild_failures=()
 if [ "$is_transaction" = true ]; then
     # Restore pacman hooks and update database
     if [ "$hooks_disabled" = true ]; then
