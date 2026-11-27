@@ -1,4 +1,4 @@
-# paru-wrapper (v1.2.2)
+# paru-wrapper (v1.2.3)
 
 [![AUR Package CI/CD](https://github.com/Vikyek/paru-wrapper/actions/workflows/aur-release.yml/badge.svg)](https://github.com/Vikyek/paru-wrapper/actions/workflows/aur-release.yml)
 [![CodeQL](https://github.com/Vikyek/paru-wrapper/actions/workflows/codeql.yml/badge.svg)](https://github.com/Vikyek/paru-wrapper/actions/workflows/codeql.yml)

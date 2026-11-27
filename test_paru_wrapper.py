@@ -1098,6 +1098,30 @@ echo "sudo:$*" >> "{trace_file}"
         self.assertEqual(res.returncode, 0, msg=res.stderr)
         self.assertFalse(os.path.exists(marker))
 
+    def test_rebuild_check_plugin_skips_when_rebuild_check_active(self):
+        """30-rebuild-check.sh skips recursive rebuild-check when REBUILD_CHECK_ACTIVE=1."""
+        plugin_path = os.path.join(REPO_DIR, "default-plugins", "30-rebuild-check.sh")
+        marker = os.path.join(self.tmpdir.name, "rebuild_check_active_called")
+        self._write_exec(
+            "rebuild-check",
+            f'#!/usr/bin/env bash\ntouch "{marker}"\nexit 0\n',
+        )
+        self._write_exec("sudo", '#!/usr/bin/env bash\n"$@"\n')
+        env = self._base_env()
+        env["REBUILD_CHECK_ACTIVE"] = "1"
+        res = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'msg_info() {{ :; }}\nis_anneal=false\nsource "{plugin_path}"\nplugin_hook deferred-hooks bpf',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertFalse(os.path.exists(marker))
+
     def test_force_rebuild_local_project_uses_cleanbuild_and_prepare_failure_retries_with_cleanbuild(self):
         """--rebuild passes -Csfi for local projects, and prepare()/build() failure retries once with -C."""
         self._setup_noop_plugins()
@@ -2527,6 +2551,119 @@ exit 0
         self.assertIn(f"pull:{bad_repo}", log)
         self.assertIn(f"pull:{good_repo}", log)
         self.assertIn(f"makepkg:{good_repo}:-sfi --noconfirm", log)
+
+    def test_force_rebuild_official_pkg_uses_pkgctl_and_falls_back(self):
+        """FORCE_REBUILD=1 clones official repos via pkgctl, handles split packages, and falls back to paru if clone fails."""
+        trace_file = os.path.join(self.tmpdir.name, "official_rebuild.log")
+        with open(os.path.join(self.plugins_dir, "20-anneal.sh"), "w", encoding="utf-8") as f:
+            f.write(f'#!/bin/bash\nplugin_hook() {{ [ "$1" = "package-rebuilt" ] && echo "rebuilt:$2" >> "{trace_file}"; }}\n')
+
+        bpf_pkg = os.path.join(self.pkgdest_dir, "bpf-7.3.6-1-x86_64.pkg.tar.zst")
+        cpupower_pkg = os.path.join(self.pkgdest_dir, "cpupower-7.3.6-1-x86_64.pkg.tar.zst")
+        fail_clone_flag = os.path.join(self.tmpdir.name, "fail_pkgctl")
+
+        self._write_exec(
+            "pkgctl",
+            f"""#!/usr/bin/env bash
+echo "pkgctl:$*" >> "{trace_file}"
+if [[ -f "{fail_clone_flag}" ]]; then
+    exit 1
+fi
+if [[ "$*" == *"--switch"* ]]; then
+    # Simulate --switch tag miss on first call to exercise fallback clone
+    if [[ "$*" == *"1-2.0-1"* ]]; then
+        exit 1
+    fi
+fi
+pkgbase="${{@: -1}}"
+mkdir -p "$pkgbase"
+cat > "$pkgbase/PKGBUILD" << 'PB'
+pkgbase=linux-tools
+pkgname=('bpf' 'cpupower')
+pkgver=7.3.6
+pkgrel=1
+PB
+exit 0
+""",
+        )
+        self._write_exec(
+            "makepkg",
+            f"""#!/usr/bin/env bash
+if [[ "$*" == *"--packagelist"* ]]; then
+    printf '%s\\n%s\\n' "{bpf_pkg}" "{cpupower_pkg}"
+    exit 0
+fi
+echo "makepkg:$*" >> "{trace_file}"
+touch "{bpf_pkg}" "{cpupower_pkg}"
+exit 0
+""",
+        )
+        self._write_exec(
+            "pacman",
+            f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == "-Si" ]]; then
+    cat << 'SI'
+Repository      : extra
+Name            : bpf
+Version         : 7.3.6-1
+Base            : linux-tools
+SI
+    exit 0
+fi
+if [[ "${{1:-}}" == "-Qp" ]]; then
+    b=$(basename "$2")
+    case "$b" in
+        bpf-*) echo "bpf 7.3.6-1" ;;
+        cpupower-*) echo "cpupower 7.3.6-1" ;;
+    esac
+    exit 0
+fi
+if [[ "${{1:-}}" == "-U" ]]; then
+    echo "pacman-U:$*" >> "{trace_file}"
+    exit 0
+fi
+exit 0
+""",
+        )
+        self._write_exec("sudo", '#!/usr/bin/env bash\n"$@"\n')
+        mock_paru = self._write_exec(
+            "mock-paru",
+            f'#!/usr/bin/env bash\n[[ "${{1:-}}" == "-Quq" ]] && exit 0\necho "paru:$*" >> "{trace_file}"\nexit 0\n',
+        )
+
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "--rebuild", "bpf"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        self.assertIn("pkgctl:repo clone --protocol https --switch 7.3.6-1 linux-tools", lines)
+        self.assertIn("makepkg:-Csf --noconfirm", lines)
+        self.assertTrue(any(ln.startswith("pacman-U:") and bpf_pkg in ln for ln in lines), msg=lines)
+        self.assertFalse(any(cpupower_pkg in ln for ln in lines), msg=lines)
+        self.assertIn("rebuilt:bpf", lines)
+        self.assertFalse(any(ln.startswith("paru:") for ln in lines), msg=lines)
+
+        # Fallback to paru when pkgctl clone fails
+        with open(trace_file, "w", encoding="utf-8") as f:
+            f.write("")
+        with open(fail_clone_flag, "w", encoding="utf-8") as f:
+            f.write("1")
+        res_fb = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "--rebuild", "bpf"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_fb.returncode, 0, msg=res_fb.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            fb_lines = [ln.strip() for ln in f if ln.strip()]
+        self.assertTrue(any(ln.startswith("paru:") and "bpf" in ln for ln in fb_lines), msg=fb_lines)
 
 
 if __name__ == "__main__":

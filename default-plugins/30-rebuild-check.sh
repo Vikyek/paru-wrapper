@@ -15,8 +15,8 @@ plugin_hook() {
     case "$hook_event" in
         deferred-hooks)
             if plugin_check; then
-                if [ "${is_anneal:-false}" = true ]; then
-                    msg_info "[rebuild-check] Skipping deferred check while running inside anneal rebuild."
+                if [ "${is_anneal:-false}" = true ] || [ "${REBUILD_CHECK_ACTIVE:-0}" = "1" ]; then
+                    msg_info "[rebuild-check] Skipping deferred check while running inside anneal/rebuild-check."
                     return 0
                 fi
                 if [ "${DRY_RUN:-false}" = true ]; then

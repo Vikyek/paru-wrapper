@@ -75,7 +75,7 @@ fi
 
 # Intercept wrapper-specific version query
 if [[ "${1:-}" == "--wrapper-version" ]]; then
-    echo "paru-wrapper 1.2.2"
+    echo "paru-wrapper 1.2.3"
     exit 0
 fi
 
@@ -479,6 +479,87 @@ verify_cloned_aur_dir() {
         verify_pkg "$build_dir" >&2 || true
         msg_warn "Security verification flagged '$pkg_name' (Verdict: ${verify_verdict:-UNKNOWN}, Danger: ${verify_danger}). Aborting rebuild!"
         return 1
+    fi
+    return 0
+}
+
+# Resolve official package base and version (returns "pkgbase<TAB>pkgver-pkgrel").
+_resolve_official_pkg_info() {
+    local pkg="$1"
+    local pkg_name="${pkg#*/}"
+    local repo_filter=""
+    if [[ "$pkg" == */* ]]; then
+        repo_filter="${pkg%%/*}"
+    fi
+    local si_out pkgbase="" pkg_ver=""
+    si_out=$(LC_ALL=C pacman -Si "$pkg" 2>/dev/null || true)
+    pkg_ver=$(awk -F '[ \t]*:[ \t]*' '/^Version[ \t]*:/ { print $2; exit }' <<< "$si_out")
+    pkgbase=$(awk -F '[ \t]*:[ \t]*' '/^(Package )?Base[ \t]*:/ { print $2; exit }' <<< "$si_out")
+
+    if [[ -z "$pkgbase" && "$(command -v pacman 2>/dev/null || true)" == "/usr/bin/pacman" ]] && command -v python3 >/dev/null 2>&1; then
+        local py_out=""
+        py_out=$(python3 - "$pkg_name" "$repo_filter" "${PARU_WRAPPER_REPO:-}" << 'PYBASE' 2>/dev/null || true
+import subprocess, sys
+try:
+    import pyalpm
+except Exception:
+    sys.exit(0)
+pkg_name, repo_filter, custom_repo = sys.argv[1:4]
+h = pyalpm.Handle("/", "/var/lib/pacman")
+if repo_filter:
+    repos = [repo_filter]
+else:
+    try:
+        repos = subprocess.check_output(["pacconf", "--repo-list"], text=True).splitlines()
+    except Exception:
+        repos = ["core", "extra", "multilib"]
+for r in repos:
+    if not r or r == custom_repo:
+        continue
+    try:
+        db = h.register_syncdb(r, 0)
+    except Exception:
+        continue
+    p = db.get_pkg(pkg_name)
+    if p is not None:
+        print(f"{p.base or p.name}\t{p.version}")
+        sys.exit(0)
+PYBASE
+        )
+        if [[ -n "$py_out" ]]; then
+            local py_base="" py_ver=""
+            IFS=$'\t' read -r py_base py_ver <<< "$py_out"
+            [[ -n "$py_base" ]] && pkgbase="$py_base"
+            [[ -z "$pkg_ver" && -n "$py_ver" ]] && pkg_ver="$py_ver"
+        fi
+    fi
+
+    printf '%s\t%s\n' "${pkgbase:-$pkg_name}" "$pkg_ver"
+}
+
+# Handle an already-built split subpackage for FORCE_REBUILD (returns 0 if handled).
+_handle_prebuilt_split_pkg() {
+    local pkg_name="$1"
+    local clone_name="$2"
+    local is_aur="${3:-1}"
+    local split_file="${_built_split_files["$pkg_name"]:-}"
+    [[ -n "$split_file" && -f "$split_file" ]] || return 1
+
+    if [[ "$_DEFER_BATCH_INSTALL" == "1" ]]; then
+        if [[ -z "${_seen_batch_pkgs["$pkg_name"]:-}" ]]; then
+            _seen_batch_pkgs["$pkg_name"]=1
+            _pending_batch_pkgs+=("$pkg_name")
+            _pending_batch_files+=("$split_file")
+        fi
+    else
+        msg_info "Installing already-built split subpackage '$pkg_name' from '$clone_name'..."
+        if sudo pacman -U --noconfirm -- "$split_file"; then
+            [[ "$is_aur" == "1" && "$pkg_name" == *-git ]] && _remove_git_fallback "$pkg_name"
+            dispatch_plugin_hooks package-rebuilt "$pkg_name"
+        else
+            msg_warn "Failed to install split subpackage '$pkg_name'."
+            force_rebuild_failures+=("$pkg_name")
+        fi
     fi
     return 0
 }
@@ -2087,7 +2168,64 @@ if [ "$is_transaction" = true ]; then
 
     for pkg in "${targets[@]}"; do
         if is_official_pkg "$pkg"; then
-            filtered_targets+=("$pkg")
+            if [ "${FORCE_REBUILD:-0}" = "1" ]; then
+                pkg_name="${pkg#*/}"
+                IFS=$'\t' read -r pkgbase pkg_ver <<< "$(_resolve_official_pkg_info "$pkg")"
+                pkgbase="${pkgbase:-$pkg_name}"
+                msg_info "FORCE_REBUILD active. Rebuilding official package '$pkg_name' (base: '$pkgbase') from source..."
+                if [ "$DRY_RUN" = true ]; then
+                    msg_info "DRY RUN: would clone '$pkgbase' via pkgctl and rebuild official package '$pkg_name' from source."
+                    continue
+                fi
+                if ! command -v pkgctl >/dev/null 2>&1; then
+                    msg_warn "pkgctl not available to clone official package '$pkg_name'. Passing '$pkg' through to paru."
+                    filtered_targets+=("$pkg")
+                    continue
+                fi
+                if _handle_prebuilt_split_pkg "$pkg_name" "$pkgbase" 0; then
+                    continue
+                fi
+                clone_parent=$(run_as_build_user mktemp -d)
+                clone_ok=false
+                if [[ -n "$pkg_ver" ]] && run_as_build_user env -C "$clone_parent" pkgctl repo clone --protocol https --switch "${pkg_ver//:/-}" "$pkgbase" >/dev/null 2>&1; then
+                    clone_ok=true
+                else
+                    run_as_build_user rm -rf -- "$clone_parent/$pkgbase" 2>/dev/null || rm -rf -- "$clone_parent/$pkgbase" 2>/dev/null || true
+                    if run_as_build_user env -C "$clone_parent" pkgctl repo clone --protocol https "$pkgbase" >/dev/null 2>&1; then
+                        clone_ok=true
+                    fi
+                fi
+                build_dir="${clone_parent}/${pkgbase}"
+                if [[ "$clone_ok" != true || ! -f "$build_dir/PKGBUILD" ]]; then
+                    msg_warn "Failed to clone official package '$pkg_name' (base: '$pkgbase') via pkgctl. Passing to paru."
+                    rm -rf "$clone_parent"
+                    filtered_targets+=("$pkg")
+                    continue
+                fi
+                cloned_info=$(_extract_pkgbuild_info "$build_dir")
+                cloned_deps=$(awk -F= '/^DEPS=/{sub(/^DEPS=/, ""); print}' <<< "$cloned_info")
+                [[ -n "$cloned_deps" ]] && _target_extra_deps+=($cloned_deps)
+                if rebuild_cloned_aur_package "$pkg_name" "$pkgbase" "$build_dir" "${targets[@]}"; then
+                    if [[ "$_DEFER_BATCH_INSTALL" == "1" && -n "${_LAST_BUILT_PKG_FILE:-}" ]]; then
+                        if [[ -z "${_seen_batch_pkgs["$pkg_name"]:-}" ]]; then
+                            _seen_batch_pkgs["$pkg_name"]=1
+                            _pending_batch_pkgs+=("$pkg_name")
+                            _pending_batch_files+=("$_LAST_BUILT_PKG_FILE")
+                            _batch_pkg_build_dirs["$pkg_name"]="$build_dir"
+                        fi
+                        _batch_cleanup_dirs+=("$clone_parent")
+                    else
+                        dispatch_plugin_hooks package-rebuilt "$pkg_name"
+                        rm -rf "$clone_parent"
+                    fi
+                else
+                    msg_warn "Failed to rebuild official package '$pkg_name'."
+                    force_rebuild_failures+=("$pkg_name")
+                    rm -rf "$clone_parent"
+                fi
+            else
+                filtered_targets+=("$pkg")
+            fi
         else
             pkg_name="${pkg#*/}"
             # If MKVPKG/<pkg> was pruned by update_mkvpkg_aur.py, unqualify it so AUR install succeeds
@@ -2146,23 +2284,7 @@ if [ "$is_transaction" = true ]; then
                         force_rebuild_failures+=("$pkg_name")
                         continue
                     fi
-                    if [[ -n "${_built_split_files["$pkg_name"]:-}" && -f "${_built_split_files["$pkg_name"]}" ]]; then
-                        if [[ "$_DEFER_BATCH_INSTALL" == "1" ]]; then
-                            if [[ -z "${_seen_batch_pkgs["$pkg_name"]:-}" ]]; then
-                                _seen_batch_pkgs["$pkg_name"]=1
-                                _pending_batch_pkgs+=("$pkg_name")
-                                _pending_batch_files+=("${_built_split_files["$pkg_name"]}")
-                            fi
-                        else
-                            msg_info "Installing already-built split subpackage '$pkg_name' from '$clone_name'..."
-                            if sudo pacman -U --noconfirm -- "${_built_split_files["$pkg_name"]}"; then
-                                [[ "$pkg_name" == *-git ]] && _remove_git_fallback "$pkg_name"
-                                dispatch_plugin_hooks package-rebuilt "$pkg_name"
-                            else
-                                msg_warn "Failed to install split subpackage '$pkg_name'."
-                                force_rebuild_failures+=("$pkg_name")
-                            fi
-                        fi
+                    if _handle_prebuilt_split_pkg "$pkg_name" "$clone_name" 1; then
                         continue
                     fi
                     build_dir=$(run_as_build_user mktemp -d)
