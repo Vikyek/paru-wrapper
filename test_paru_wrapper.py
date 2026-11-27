@@ -2665,6 +2665,65 @@ exit 0
             fb_lines = [ln.strip() for ln in f if ln.strip()]
         self.assertTrue(any(ln.startswith("paru:") and "bpf" in ln for ln in fb_lines), msg=fb_lines)
 
+    def test_makepkg_imports_repo_pgp_keys_and_recovers_unknown_key(self):
+        """rebuild_cloned_aur_package imports keys/pgp/*.asc and run_makepkg_with_recovery recovers unknown public keys."""
+        trace_file = os.path.join(self.tmpdir.name, "pgp_trace.log")
+        pkg_file = os.path.join(self.pkgdest_dir, "bpf-7.3.6-1-x86_64.pkg.tar.zst")
+        build_dir = os.path.join(self.tmpdir.name, "linux-tools")
+        os.makedirs(os.path.join(build_dir, "keys", "pgp"))
+        asc_path = os.path.join(build_dir, "keys", "pgp", "38DBBDC86092693E.asc")
+        with open(asc_path, "w", encoding="utf-8") as f:
+            f.write("-----BEGIN PGP PUBLIC KEY BLOCK-----\n-----END PGP PUBLIC KEY BLOCK-----\n")
+
+        self._write_exec(
+            "gpg",
+            f"""#!/usr/bin/env bash
+echo "gpg:$*" >> "{trace_file}"
+[[ "${{1:-}}" == "--list-keys" ]] && exit 1
+exit 0
+""",
+        )
+        attempts_file = os.path.join(self.tmpdir.name, "mk_attempts")
+        self._write_exec(
+            "makepkg",
+            f"""#!/usr/bin/env bash
+if [[ "$*" == *"--packagelist"* ]]; then
+    echo "{pkg_file}"
+    exit 0
+fi
+c=0
+[[ -f "{attempts_file}" ]] && c=$(cat "{attempts_file}")
+c=$((c + 1))
+echo "$c" > "{attempts_file}"
+echo "makepkg:$c:$*" >> "{trace_file}"
+if [[ $c -eq 1 ]]; then
+    echo "    linux-7.3.6.tar ... FAILED (unknown public key 38DBBDC86092693E)" >&2
+    exit 1
+fi
+touch "{pkg_file}"
+exit 0
+""",
+        )
+        self._write_exec("pacman", '#!/usr/bin/env bash\n[[ "${1:-}" == "-Qp" ]] && echo "bpf 7.3.6-1"\nexit 0\n')
+        self._write_exec("sudo", '#!/usr/bin/env bash\n"$@"\n')
+
+        res = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source "{PARU_WRAPPER_PATH}"\n_DEFER_BATCH_INSTALL=1\nrebuild_cloned_aur_package "bpf" "linux-tools" "{build_dir}" "bpf"',
+            ],
+            env=self._base_env(),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        self.assertIn(f"gpg:--import {asc_path}", lines)
+        self.assertTrue(any(ln.startswith("gpg:--recv-keys 38DBBDC86092693E") for ln in lines), msg=lines)
+        self.assertEqual(sum(1 for ln in lines if ln.startswith("makepkg:")), 2, msg=lines)
+
 
 if __name__ == "__main__":
     unittest.main()

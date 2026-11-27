@@ -75,7 +75,7 @@ fi
 
 # Intercept wrapper-specific version query
 if [[ "${1:-}" == "--wrapper-version" ]]; then
-    echo "paru-wrapper 1.2.3"
+    echo "paru-wrapper 1.2.4"
     exit 0
 fi
 
@@ -378,6 +378,10 @@ rebuild_cloned_aur_package() {
 
     _LAST_BUILT_PKG_FILE=""
     _preflight_haskell_check "$pkg_name" "$build_dir"
+
+    if [[ -d "$build_dir/keys/pgp" ]] && compgen -G "$build_dir/keys/pgp/*.asc" >/dev/null 2>&1; then
+        run_as_build_user gpg --import "$build_dir"/keys/pgp/*.asc >/dev/null 2>&1 || true
+    fi
 
     local pre_pkgfiles=()
     mapfile -t pre_pkgfiles < <(run_as_build_user env -C "$build_dir" makepkg --packagelist 2>/dev/null || true)
@@ -1517,7 +1521,7 @@ run_makepkg_with_recovery() {
     local makepkg_log
     makepkg_log=$(mktemp)
 
-    local srcdest_retried=0 cleanbuild_retried=0 rc=0
+    local srcdest_retried=0 cleanbuild_retried=0 pgp_retried=0 rc=0
     while true; do
         rc=0
         run_with_network_resume _run_makepkg_with_tee "$makepkg_log" "$build_dir" "${makepkg_args[@]}" || rc=$?
@@ -1525,6 +1529,29 @@ run_makepkg_with_recovery() {
         if [[ $rc -eq 0 || $rc -gt 128 ]]; then
             rm -f "$makepkg_log"
             return "$rc"
+        fi
+
+        local clean_log
+        clean_log=$(sed -E $'s/\x1B(\\[[0-9;?]*[[:alpha:]]|\\([AB012])//g' "$makepkg_log" 2>/dev/null || true)
+
+        if (( pgp_retried == 0 )) && grep -qE 'FAILED \(unknown public key [0-9A-Fa-f]+\)' <<< "$clean_log"; then
+            local -a missing_keys=()
+            mapfile -t missing_keys < <(grep -oE 'unknown public key [0-9A-Fa-f]+' <<< "$clean_log" | awk '{print $NF}' | awk '!seen[$0]++')
+            if [[ ${#missing_keys[@]} -gt 0 ]]; then
+                msg_warn "Detected missing PGP key(s) (${missing_keys[*]}). Importing keys and retrying makepkg..."
+                if [[ -d "$build_dir/keys/pgp" ]] && compgen -G "$build_dir/keys/pgp/*.asc" >/dev/null 2>&1; then
+                    run_as_build_user gpg --import "$build_dir"/keys/pgp/*.asc >/dev/null 2>&1 || true
+                fi
+                local k
+                for k in "${missing_keys[@]}"; do
+                    if ! run_as_build_user gpg --list-keys "$k" >/dev/null 2>&1; then
+                        run_as_build_user gpg --recv-keys "$k" >/dev/null 2>&1 || \
+                            run_as_build_user gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys "$k" >/dev/null 2>&1 || true
+                    fi
+                done
+                pgp_retried=1
+                continue
+            fi
         fi
 
         local stale_dir=""
@@ -1543,8 +1570,6 @@ run_makepkg_with_recovery() {
         fi
 
         if (( cleanbuild_retried == 0 )) && ! _has_cleanbuild_flag "${makepkg_args[@]}"; then
-            local clean_log
-            clean_log=$(sed -E $'s/\x1B(\\[[0-9;?]*[[:alpha:]]|\\([AB012])//g' "$makepkg_log" 2>/dev/null || true)
             if grep -qE 'A failure occurred in (prepare|build)\(\)|locally modified|Reversed \(or previously applied\) patch' <<< "$clean_log"; then
                 msg_warn "makepkg failed in prepare()/build() without cleanbuild. Retrying with -C (--cleanbuild)..."
                 makepkg_args=(-C "${makepkg_args[@]}")
