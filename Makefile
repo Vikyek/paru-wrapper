@@ -1,5 +1,5 @@
 NAME = paru-wrapper
-VERSION = 1.2.0
+VERSION = 1.2.1
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man/man1

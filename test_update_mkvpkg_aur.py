@@ -527,6 +527,136 @@ class TestUpdateMkvpkgAur(unittest.TestCase):
         mock_ensure_lock.assert_called_once_with("/fake/db.tar.gz")
         mock_run.assert_not_called()
 
+    @patch.object(update_mkvpkg_aur, 'db_path', '/fake/MKVPKG.db.tar.gz')
+    @patch.object(update_mkvpkg_aur, 'projects_dir', '/fake/projects')
+    @patch.object(update_mkvpkg_aur, 'repo_name', 'testrepo')
+    @patch('os.path.exists', return_value=True)
+    @patch('os.path.isdir', return_value=False)
+    @patch('update_mkvpkg_aur.ensure_repo_signatures', return_value=False)
+    @patch('update_mkvpkg_aur.ensure_repo_lock_clear', return_value=True)
+    @patch('update_mkvpkg_aur.get_makepkg_gpgkey', return_value='TESTKEY123')
+    @patch('update_mkvpkg_aur.get_mkvpkg_packages_and_versions')
+    @patch('update_mkvpkg_aur.query_aur')
+    @patch('update_mkvpkg_aur.is_installed')
+    @patch('update_mkvpkg_aur.subprocess.run')
+    @patch('update_mkvpkg_aur.alpm_vercmp')
+    def test_main_skips_pacman_sy_when_signature_verification_fails(
+        self, mock_alpm_vercmp, mock_run, mock_is_installed, mock_query_aur,
+        mock_get_pkgs, mock_gpg, mock_ensure_lock, mock_ensure_sigs, mock_isdir, mock_exists
+    ):
+        mock_get_pkgs.return_value = {"pkg1": "1.0"}
+        mock_query_aur.return_value = {"pkg1": "2.0"}
+        mock_is_installed.return_value = False
+        mock_alpm_vercmp.return_value = 1
+        mock_run.return_value = MagicMock(returncode=0)
+
+        update_mkvpkg_aur.main()
+
+        mock_ensure_sigs.assert_called_once_with("/fake/MKVPKG.db.tar.gz", "TESTKEY123")
+        for call in mock_run.call_args_list:
+            self.assertNotEqual(call[0][0], ["sudo", "pacman", "-Sy"])
+
+
+class TestRepoSignatureVerification(unittest.TestCase):
+
+    @patch('update_mkvpkg_aur.subprocess.run')
+    def test_ensure_repo_signatures_passes_when_valid(self, mock_run):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "MKVPKG.db.tar.gz")
+            files_path = os.path.join(tmpdir, "MKVPKG.files.tar.gz")
+            for p in (db_path, f"{db_path}.sig", files_path, f"{files_path}.sig"):
+                with open(p, "wb") as f:
+                    f.write(b"data")
+
+            mock_run.return_value = MagicMock(returncode=0)
+            self.assertTrue(update_mkvpkg_aur.ensure_repo_signatures(db_path, "TESTKEY123"))
+            self.assertEqual(mock_run.call_count, 2)
+            mock_run.assert_any_call(
+                ["gpg", "--verify", f"{db_path}.sig", db_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            mock_run.assert_any_call(
+                ["gpg", "--verify", f"{files_path}.sig", files_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+    @patch('update_mkvpkg_aur.subprocess.run')
+    def test_ensure_repo_signatures_resigns_stale_hardlinked_sig(self, mock_run):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "MKVPKG.db.tar.gz")
+            files_path = os.path.join(tmpdir, "MKVPKG.files.tar.gz")
+            db_old_sig = f"{db_path}.old.sig"
+            files_old_sig = f"{files_path}.old.sig"
+            db_sig = f"{db_path}.sig"
+            files_sig = f"{files_path}.sig"
+
+            for p in (db_path, files_path):
+                with open(p, "wb") as f:
+                    f.write(b"new-db-bytes")
+            for p in (db_old_sig, files_old_sig):
+                with open(p, "wb") as f:
+                    f.write(b"old-sig-bytes")
+            # Simulate repo-remove rotate_db hardlink when signing failed
+            os.link(db_old_sig, db_sig)
+            os.link(files_old_sig, files_sig)
+            os.symlink("MKVPKG.db.tar.gz", os.path.join(tmpdir, "MKVPKG.db"))
+            os.symlink("MKVPKG.files.tar.gz", os.path.join(tmpdir, "MKVPKG.files"))
+
+            resigned = set()
+
+            def run_side_effect(cmd, **kwargs):
+                if cmd[:2] == ["gpg", "--verify"]:
+                    sig_arg = cmd[2]
+                    return MagicMock(returncode=0 if sig_arg in resigned else 1)
+                if cmd[:2] == ["gpg", "--batch"]:
+                    out_idx = cmd.index("-o") + 1
+                    out_sig = cmd[out_idx]
+                    with open(out_sig, "wb") as f:
+                        f.write(b"fresh-sig-bytes")
+                    resigned.add(out_sig)
+                    return MagicMock(returncode=0)
+                return MagicMock(returncode=0)
+
+            mock_run.side_effect = run_side_effect
+
+            self.assertTrue(update_mkvpkg_aur.ensure_repo_signatures(db_path, "TESTKEY123"))
+
+            with open(db_old_sig, "rb") as f:
+                self.assertEqual(f.read(), b"old-sig-bytes")
+            with open(files_old_sig, "rb") as f:
+                self.assertEqual(f.read(), b"old-sig-bytes")
+            with open(db_sig, "rb") as f:
+                self.assertEqual(f.read(), b"fresh-sig-bytes")
+            with open(files_sig, "rb") as f:
+                self.assertEqual(f.read(), b"fresh-sig-bytes")
+            self.assertEqual(os.readlink(os.path.join(tmpdir, "MKVPKG.db.sig")), "MKVPKG.db.tar.gz.sig")
+            self.assertEqual(os.readlink(os.path.join(tmpdir, "MKVPKG.files.sig")), "MKVPKG.files.tar.gz.sig")
+            mock_run.assert_any_call(
+                [
+                    "gpg", "--batch", "--yes", "--detach-sign", "--use-agent", "--no-armor",
+                    "-u", "TESTKEY123", "-o", db_sig, db_path,
+                ],
+                check=True,
+            )
+
+    @patch('update_mkvpkg_aur.subprocess.run')
+    def test_ensure_repo_signatures_returns_false_on_sign_failure(self, mock_run):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "MKVPKG.db.tar.gz")
+            with open(db_path, "wb") as f:
+                f.write(b"data")
+
+            mock_run.side_effect = subprocess.CalledProcessError(2, ["gpg"])
+            self.assertFalse(update_mkvpkg_aur.ensure_repo_signatures(db_path, "TESTKEY123"))
+
 
 class TestRepoLockfileHandling(unittest.TestCase):
 

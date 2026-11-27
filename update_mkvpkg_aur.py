@@ -9,6 +9,7 @@ import os
 import urllib.request
 import urllib.parse
 import json
+import re
 import sys
 import time
 
@@ -339,6 +340,84 @@ def ensure_repo_lock_clear(db_path: str, timeout: int = 120) -> bool:
         time.sleep(min(1.0, max(0.05, deadline - now)))
 
 
+def _companion_files_db_path(db_archive_path: str) -> str:
+    """Derives the companion .files archive path from a .db repository archive path."""
+    files_path = re.sub(r"\.db(\.tar(?:\.[^.]+)?)$", r".files\1", db_archive_path)
+    return files_path if files_path != db_archive_path else ""
+
+
+def _verify_sig(sig_path: str, archive_path: str) -> bool:
+    """Verifies a detached GPG signature against its target archive."""
+    if not os.path.exists(sig_path):
+        return False
+    res = subprocess.run(
+        ["gpg", "--verify", sig_path, archive_path],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )  # nosec
+    return res.returncode == 0
+
+
+def _ensure_short_sig_symlink(archive_path: str, sig_path: str) -> None:
+    """Ensures the short repo symlink (e.g. MKVPKG.db.sig) points to the .tar.*.sig file."""
+    short_path = re.sub(r"\.tar.*$", "", archive_path)
+    if short_path == archive_path or not os.path.lexists(short_path):
+        return
+    short_sig = f"{short_path}.sig"
+    target_name = os.path.basename(sig_path)
+    try:
+        if os.path.islink(short_sig) and os.readlink(short_sig) == target_name:
+            return
+        if os.path.lexists(short_sig):
+            os.unlink(short_sig)
+        os.symlink(target_name, short_sig)
+    except OSError:
+        pass
+
+
+def ensure_repo_signatures(repo_db_path: str, gpg_key: str = "") -> bool:
+    """
+    Verifies detached GPG signatures on the repository DB and companion .files archive.
+    Because repo-remove only warns when signing fails and leaves the hardlinked .old.sig
+    in place, any missing or invalid .sig is unlinked (preserving .old.sig), re-signed,
+    and re-verified.
+    """
+    archives = [repo_db_path]
+    files_path = _companion_files_db_path(repo_db_path)
+    if files_path and os.path.exists(files_path):
+        archives.append(files_path)
+
+    for archive_path in archives:
+        sig_path = f"{archive_path}.sig"
+        if _verify_sig(sig_path, archive_path):
+            _ensure_short_sig_symlink(archive_path, sig_path)
+            continue
+
+        # repo-remove's rotate_db hardlinks <db>.sig -> <db>.old.sig before rotating;
+        # unlink first so re-signing never mutates the .old.sig inode.
+        if os.path.lexists(sig_path):
+            try:
+                os.unlink(sig_path)
+            except OSError:
+                return False
+
+        sign_cmd = ["gpg", "--batch", "--yes", "--detach-sign", "--use-agent", "--no-armor"]
+        if gpg_key:
+            sign_cmd.extend(["-u", gpg_key])
+        sign_cmd.extend(["-o", sig_path, archive_path])
+
+        try:
+            subprocess.run(sign_cmd, check=True)  # nosec
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            return False
+
+        if not _verify_sig(sig_path, archive_path):
+            return False
+        _ensure_short_sig_symlink(archive_path, sig_path)
+
+    return True
+
+
 def main():
     """
     Main execution entry point. Scans local repo, queries AUR, and unregisters
@@ -475,6 +554,12 @@ def main():
             sys.stderr.write(f"{c_warn}⚠ [update_mkvpkg_aur] Warning:{c_reset} Failed to run repo-remove: {e}\n")
 
     if db_changed:
+        if not ensure_repo_signatures(db_path, gpg_key):
+            sys.stderr.write(
+                f"{c_error}✖ Error:{c_reset} Repository database signature verification/signing failed for '{db_path}'. "
+                f"Skipping pacman -Sy.\n"
+            )
+            return
         try:
             subprocess.run(["sudo", "pacman", "-Sy"], check=True) # nosec
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
