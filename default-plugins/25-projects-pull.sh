@@ -61,9 +61,8 @@ plugin_hook() {
                 fi
 
                 # Attempt fast-forward update as the invoking user
-                local pull_output
-                pull_output=$(run_as_user git -C "$repo" pull --ff-only 2>&1)
-                local pull_exit=$?
+                local pull_output pull_exit=0
+                pull_output=$(run_as_user git -C "$repo" pull --ff-only 2>&1) || pull_exit=$?
 
                 if [ $pull_exit -eq 0 ] && [ "$pull_output" != "Already up to date." ]; then
                     msg_info "[projects-pull] Updated ${repo_name}: ${pull_output}"

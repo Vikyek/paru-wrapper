@@ -75,7 +75,7 @@ fi
 
 # Intercept wrapper-specific version query
 if [[ "${1:-}" == "--wrapper-version" ]]; then
-    echo "paru-wrapper 1.2.1"
+    echo "paru-wrapper 1.2.2"
     exit 0
 fi
 
@@ -2271,7 +2271,7 @@ if [ "$is_transaction" = true ]; then
 
     # Write total packages to paru_total_packages for progress counter
     if [[ -n "$upgrades" ]]; then
-        total_pkgs=$(echo "$upgrades" | grep -v "^$" | grep -c "")
+        total_pkgs=$(echo "$upgrades" | grep -v "^$" | grep -c "" || true)
         tmp_total=$(mktemp "$CACHE_DIR/paru_total_packages.XXXXXX" 2>/dev/null || true)
         if [ -n "$tmp_total" ]; then
             echo "$total_pkgs" > "$tmp_total"
@@ -2294,23 +2294,23 @@ if [ "$is_transaction" = true ]; then
         new_deps=""
         if [[ -n "$upgrades" ]]; then
             # Query pacman sync database for repository packages dependencies (including make dependencies if available)
-            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | _parse_si_deps)
+            repo_deps=$(echo "$upgrades" | xargs -r pacman -Si 2>/dev/null | _parse_si_deps || true)
             
             # Query AUR RPC (or paru info) for AUR package dependencies and makedepends
             aur_deps=""
             # Exclude packages from official repositories, but include custom local repository targets in AUR checks
             local_repo_pattern="${PARU_WRAPPER_REPO:-}"
             if [[ -n "$local_repo_pattern" ]]; then
-                official_pkgs_list=$(pacman -Sl 2>/dev/null | awk -v repo="$local_repo_pattern" '$1 != repo { print $2 }')
+                official_pkgs_list=$(pacman -Sl 2>/dev/null | awk -v repo="$local_repo_pattern" '$1 != repo { print $2 }' || true)
             else
-                official_pkgs_list=$(pacman -Slq 2>/dev/null)
+                official_pkgs_list=$(pacman -Slq 2>/dev/null || true)
             fi
             aur_upgrades=$(echo "$upgrades" | grep -vFf <(echo "$official_pkgs_list") || true)
             if [[ -n "$aur_upgrades" ]]; then
-                aur_deps=$(echo "$aur_upgrades" | xargs -r "${PARU_BIN:-/usr/bin/paru}" --aur -Si 2>/dev/null | _parse_si_deps)
+                aur_deps=$(echo "$aur_upgrades" | xargs -r "${PARU_BIN:-/usr/bin/paru}" --aur -Si 2>/dev/null | _parse_si_deps || true)
             fi
 
-            new_deps=$(echo -e "${repo_deps}\n${aur_deps}" | sort -u)
+            new_deps=$(echo -e "${repo_deps}\n${aur_deps}" | sort -u || true)
         fi
 
         # 4. Filter out any orphans that are in new_deps (plus build-deps/toolchains & target makedeps by default)
@@ -2334,7 +2334,7 @@ if [ "$is_transaction" = true ]; then
             done
 
             if [ ${#targets[@]} -gt 0 ]; then
-                target_repo_deps=$(LC_ALL=C pacman -Si "${targets[@]}" 2>/dev/null | _parse_si_deps)
+                target_repo_deps=$(LC_ALL=C pacman -Si "${targets[@]}" 2>/dev/null | _parse_si_deps || true)
                 while IFS= read -r dep; do
                     [[ -n "$dep" ]] && new_deps_map["$dep"]=1
                 done <<< "$target_repo_deps"

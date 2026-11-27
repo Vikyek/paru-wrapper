@@ -2384,6 +2384,150 @@ exit 0
             row = f.read().strip().split("\t")
         self.assertEqual(row[:3], ["custom-tool-git", "custom-tool", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"])
 
+    def test_orphan_dep_resolution_survives_mixed_aur_upgrades_and_aur_targets(self):
+        """Mixed repo+AUR upgrades and AUR targets must not abort paru-wrapper via pacman -Si pipefail."""
+        trace_file = os.path.join(self.tmpdir.name, "mixed_orphan_trace.log")
+        self._write_exec(
+            "curl",
+            """#!/usr/bin/env bash
+cat << 'JSON'
+{"results":[{"Name":"target-aur","PackageBase":"target-aur","Version":"1.0-1","MakeDepends":["custom-makedep"]}]}
+JSON
+""",
+        )
+        self._write_exec(
+            "pacman",
+            f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == "-Qtdq" ]]; then
+    printf 'repo-needed-dep\\ntrue-orphan\\n'
+    exit 0
+fi
+if [[ "${{1:-}}" == "-Sl" || "${{1:-}}" == "-Slq" ]]; then
+    echo "core repo-pkg 1.0-1"
+    exit 0
+fi
+if [[ "${{1:-}}" == "-Si" ]]; then
+    shift
+    rc=0
+    for pkg in "$@"; do
+        if [[ "$pkg" == "repo-pkg" ]]; then
+            printf 'Repository      : core\\nName            : repo-pkg\\nDepends On      : repo-needed-dep\\n\\n'
+        else
+            echo "error: package '$pkg' was not found" >&2
+            rc=1
+        fi
+    done
+    exit "$rc"
+fi
+if [[ "${{1:-}}" == "-Rns" ]]; then
+    echo "pacman-Rns:$*" >> "{trace_file}"
+    exit 0
+fi
+exit 0
+""",
+        )
+        self._write_exec("sudo", '#!/usr/bin/env bash\n"$@"\n')
+        mock_paru = self._write_exec(
+            "mock-paru",
+            f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == "-Quq" ]]; then
+    printf 'repo-pkg\\naur-upgrade-pkg\\nmissing-aur-pkg\\n'
+    exit 0
+fi
+if [[ "${{1:-}}" == "--aur" && "${{2:-}}" == "-Si" ]]; then
+    shift 2
+    rc=0
+    for pkg in "$@"; do
+        if [[ "$pkg" == "aur-upgrade-pkg" ]]; then
+            printf 'Repository      : aur\\nName            : aur-upgrade-pkg\\nDepends On      : None\\n\\n'
+        else
+            rc=1
+        fi
+    done
+    exit "$rc"
+fi
+echo "paru:$*" >> "{trace_file}"
+exit 0
+""",
+        )
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+        res = subprocess.run(
+            [PARU_WRAPPER_PATH, "-S", "target-aur"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log = f.read()
+        self.assertIn("pacman-Rns:-Rns --noconfirm -- true-orphan", log)
+        self.assertNotIn("repo-needed-dep", log)
+        self.assertIn("paru:--pacman /usr/bin/pacman-wrapper -S target-aur", log)
+
+    def test_projects_pull_continues_after_git_pull_failure(self):
+        """A failing git pull --ff-only in one project must not abort 25-projects-pull.sh under set -e."""
+        proj_dir = os.path.join(self.tmpdir.name, "Projects")
+        bad_repo = os.path.join(proj_dir, "aaa-broken-repo")
+        good_repo = os.path.join(proj_dir, "zzz-good-repo")
+        for repo in (bad_repo, good_repo):
+            os.makedirs(os.path.join(repo, ".git"), exist_ok=True)
+            with open(os.path.join(repo, "PKGBUILD"), "w", encoding="utf-8") as f:
+                f.write(f"pkgname={os.path.basename(repo)}\npkgver=1\npkgrel=1\n")
+
+        trace_file = os.path.join(self.tmpdir.name, "pull_trace.log")
+        self._write_exec(
+            "git",
+            f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == "-C" ]]; then
+    repo="$2"
+    shift 2
+    case "${{1:-}}" in
+        status) exit 0 ;;
+        config) echo "https://example.invalid/repo.git"; exit 0 ;;
+        pull)
+            echo "pull:$repo" >> "{trace_file}"
+            if [[ "$repo" == *"aaa-broken-repo" ]]; then
+                echo "fatal: Not possible to fast-forward, aborting." >&2
+                exit 128
+            fi
+            echo "Updating 1111111..2222222"
+            exit 0
+            ;;
+    esac
+fi
+exit 0
+""",
+        )
+        self._write_exec("pacman", '#!/usr/bin/env bash\n[[ "${1:-}" == "-Qq" ]] && exit 0\nexit 0\n')
+        self._write_exec("verify_pkg", '#!/usr/bin/env bash\n[[ "${1:-}" == "--json" ]] && echo \'{"danger_score":0,"verdict":"CLEAN"}\'\nexit 0\n')
+        self._write_exec("makepkg", f'#!/usr/bin/env bash\necho "makepkg:$PWD:$*" >> "{trace_file}"\nexit 0\n')
+        self._write_exec("sudo", '#!/usr/bin/env bash\n"$@"\n')
+        mock_paru = self._write_exec("mock-paru", "#!/usr/bin/env bash\nexit 0\n")
+
+        plugin_dir = os.path.join(os.path.dirname(PARU_WRAPPER_PATH), "default-plugins")
+        env = self._base_env()
+        env["PARU_BIN"] = mock_paru
+        env["PARU_WRAPPER_PROJECTS_DIR"] = proj_dir
+        env["XDG_CONFIG_HOME"] = os.path.join(self.tmpdir.name, "empty-xdg")
+        # Run 25-projects-pull.sh directly under set -euo pipefail inside a paru-wrapper transaction
+        res = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'set -euo pipefail; source "{plugin_dir}/25-projects-pull.sh"; msg_info() {{ :; }}; msg_warn() {{ :; }}; plugin_hook pre-transaction',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        with open(trace_file, encoding="utf-8") as f:
+            log = f.read()
+        self.assertIn(f"pull:{bad_repo}", log)
+        self.assertIn(f"pull:{good_repo}", log)
+        self.assertIn(f"makepkg:{good_repo}:-sfi --noconfirm", log)
+
 
 if __name__ == "__main__":
     unittest.main()
